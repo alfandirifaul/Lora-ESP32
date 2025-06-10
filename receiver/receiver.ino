@@ -11,17 +11,29 @@
 #define rst 14
 #define dio0 2
 
-#define LED 12
+#define BUZZER 12
 
-void setup() {
+// Emergency alarm settings
+const int ALARM_DURATION = 5000;    // Total alarm duration (5 seconds)
+const int BEEP_ON_TIME = 200;       // Beep on time (200ms)
+const int BEEP_OFF_TIME = 200;      // Beep off time (200ms)
+const int ALARM_FREQUENCY = 1000;   // Buzzer frequency (1kHz)
+
+// Variables for alarm control
+bool alarmActive = false;
+unsigned long alarmStartTime = 0;
+unsigned long lastBeepTime = 0;
+bool buzzerState = false;
+
+void setup() {  
   //initialize Serial Monitor
   Serial.begin(115200);
   while (!Serial);
-  Serial.println("LoRa Receiver");
+  Serial.println("LoRa Receiver with Emergency Alarm");
 
-  // Initialize built-in LED
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, LOW); // Turn off LED initially
+  // Initialize buzzer
+  pinMode(BUZZER, OUTPUT);
+  digitalWrite(BUZZER, LOW); // Turn off buzzer initially
 
   //setup LoRa transceiver module
   LoRa.setPins(ss, rst, dio0);
@@ -35,15 +47,59 @@ void setup() {
   Serial.println("LoRa Initializing OK!");
 }
 
+void startEmergencyAlarm() {
+  alarmActive = true;
+  alarmStartTime = millis();
+  lastBeepTime = millis();
+  buzzerState = true;
+  digitalWrite(BUZZER, HIGH);
+  Serial.println("🚨 EMERGENCY ALARM ACTIVATED! 🚨");
+}
+
+void updateEmergencyAlarm() {
+  if (!alarmActive) return;
+  
+  unsigned long currentTime = millis();
+  
+  // Check if alarm duration has ended
+  if (currentTime - alarmStartTime >= ALARM_DURATION) {
+    alarmActive = false;
+    buzzerState = false;
+    digitalWrite(BUZZER, LOW);
+    Serial.println("Emergency alarm deactivated");
+    return;
+  }
+  
+  // Handle beeping pattern
+  if (buzzerState) {
+    // Buzzer is currently ON, check if it's time to turn OFF
+    if (currentTime - lastBeepTime >= BEEP_ON_TIME) {
+      buzzerState = false;
+      digitalWrite(BUZZER, LOW);
+      lastBeepTime = currentTime;
+    }
+  } else {
+    // Buzzer is currently OFF, check if it's time to turn ON
+    if (currentTime - lastBeepTime >= BEEP_OFF_TIME) {
+      buzzerState = true;
+      digitalWrite(BUZZER, HIGH);
+      lastBeepTime = currentTime;
+    }
+  }
+}
+
 void loop() {
+  // Update emergency alarm if active
+  updateEmergencyAlarm();
+  
   // try to parse packet
   int packetSize = LoRa.parsePacket();
   if (packetSize) {
-    // Turn on LED when packet is received
-    digitalWrite(LED, HIGH);
+    // Start emergency alarm when packet is received
+    startEmergencyAlarm();
     
     // received a packet
-    Serial.print("Received packet '");
+    Serial.print("📡 MOTION DETECTED! Received packet: '");
 
     // read packet
     while (LoRa.available()) {
@@ -53,10 +109,10 @@ void loop() {
 
     // print RSSI of packet
     Serial.print("' with RSSI ");
-    Serial.println(LoRa.packetRssi());
-    
-    // Keep LED on for 1 second, then turn it off
-    delay(1000);
-    digitalWrite(LED, LOW);
+    Serial.print(LoRa.packetRssi());
+    Serial.println(" dBm");
   }
+  
+  // Small delay to prevent excessive CPU usage
+  delay(10);
 }

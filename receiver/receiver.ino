@@ -28,15 +28,20 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // Emergency alarm settings
-const int ALARM_DURATION = 3000;  // Total alarm duration (3 seconds)
-const int BEEP_ON_TIME = 150;     // Beep on time (150ms)
-const int BEEP_OFF_TIME = 150;    // Beep off time (150ms)
+const int ALARM_DURATION = 5000;     // Extended alarm duration (5 seconds)
+const int BEEP_ON_TIME = 200;        // Longer beep on time (200ms)
+const int BEEP_OFF_TIME = 100;       // Shorter beep off time (100ms) - more urgent sound
+const int URGENT_BEEP_COUNT = 5;     // Number of urgent beeps at start
+const int PAUSE_BETWEEN_CYCLES = 200; // Pause between beep cycles
 
-// Variables for alarm control
+// Enhanced alarm control variables
 bool alarmActive = false;
 unsigned long alarmStartTime = 0;
 unsigned long lastBeepTime = 0;
 bool buzzerState = false;
+int beepCycleCount = 0;
+int urgentBeepsCompleted = 0;
+bool inUrgentPhase = true;
 
 // Enhanced motion detection log
 int motionCount = 0;
@@ -205,7 +210,7 @@ void processReceivedPacket() {
 void sendImmediateTelegramAlert() {
   // Create professional Indonesian alert message
   String timestamp = getCurrentTime();
-  String alertMessage = "🚨 *DETEKSI GERAKAN REAL-TIME!*\n\n"
+  String alertMessage = "🚨 *ADA PERGERAKAN TERDETEKSI!*\n\n"
                        "⚠️ *ALERT KEAMANAN #" + String(motionCount) + "*\n"
                        "🕐 *Waktu:* " + timestamp + "\n"
                        "📍 *Lokasi:* Area Terpantau\n"
@@ -458,15 +463,20 @@ void showReadyScreen() {
 void updateDisplay() {
   display.clearDisplay();
 
-  // Header with animation
+  // Header with enhanced animation
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   display.print("MOTION LOGGER ");
 
-  // Animated status indicator
+  // Enhanced animated status indicator
   if (alarmActive) {
-    display.print("🚨");
+    // Flashing alarm indicator
+    if (millis() % 500 < 250) {
+      display.print("ALARM!");
+    } else {
+      display.print("      ");
+    }
   } else {
     const char* indicators[] = { "●", "◐", "○", "◑" };
     display.print(indicators[animationFrame]);
@@ -479,18 +489,33 @@ void updateDisplay() {
   display.setCursor(0, 13);
 
   if (alarmActive) {
-    // Alert mode display
+    // Enhanced alert mode display
     display.setTextSize(2);
-    display.setCursor(20, 20);
+    display.setCursor(10, 18);
     display.println("MOTION!");
     display.setTextSize(1);
-    display.setCursor(0, 40);
+    display.setCursor(0, 38);
     display.print("Alert #");
-    display.println(motionCount);
-    display.setCursor(0, 50);
-    display.print("RSSI: ");
+    display.print(motionCount);
+    display.print(" | RSSI: ");
     display.print(lastRSSI);
-    display.println(" dBm");
+    display.println("dBm");
+    
+    // Show buzzer status
+    display.setCursor(0, 48);
+    if (buzzerState) {
+      display.print("BUZZER: ON  ");
+    } else {
+      display.print("BUZZER: OFF ");
+    }
+    
+    // Show remaining alarm time
+    unsigned long remainingTime = (ALARM_DURATION - (millis() - alarmStartTime)) / 1000;
+    display.setCursor(0, 58);
+    display.print("Time: ");
+    display.print(remainingTime);
+    display.println("s");
+    
   } else {
     // Normal monitoring display
     display.setTextSize(1);
@@ -565,16 +590,15 @@ void updateDisplay() {
 }
 
 void startEmergencyAlarm() {
-  // Send Telegram alert
-  String alertMessage = "🚨 Motion Detected!\nAlert #" + String(motionCount) +
-                      "\nRSSI: " + lastRSSI + " dBm\nMessage: " + lastMessage +
-                      "\nUptime: " + String((millis() - systemStartTime)/1000) + "s";
-  sendTelegramMessage(alertMessage);
-
   alarmActive = true;
   alarmStartTime = millis();
   lastBeepTime = millis();
   buzzerState = true;
+  beepCycleCount = 0;
+  urgentBeepsCompleted = 0;
+  inUrgentPhase = true;
+  
+  // Start with immediate urgent beep
   digitalWrite(BUZZER, HIGH);
 
   // Update RSSI statistics
@@ -582,16 +606,17 @@ void startEmergencyAlarm() {
   if (currentRSSI > maxRSSI) maxRSSI = currentRSSI;
   if (currentRSSI < minRSSI) minRSSI = currentRSSI;
 
-  Serial.println("🚨 MOTION ALERT ACTIVATED! 🚨");
+  Serial.println("🚨 EMERGENCY ALARM ACTIVATED! 🚨");
   Serial.print("📊 Detection #");
   Serial.print(motionCount);
   Serial.print(" | RSSI: ");
   Serial.print(lastRSSI);
   Serial.println(" dBm");
-  Serial.println("📨 Message: " + lastMessage + " successfully send to Telegram");
+  Serial.println("📨 Message: " + lastMessage + " successfully sent to Telegram");
   Serial.print("🕐 Uptime: ");
   Serial.print((millis() - systemStartTime) / 1000);
   Serial.println(" seconds since start");
+  Serial.println("🔔 BUZZER: Emergency alarm pattern activated");
 
   displayNeedsUpdate = true;
 }
@@ -607,25 +632,56 @@ void updateEmergencyAlarm() {
     buzzerState = false;
     digitalWrite(BUZZER, LOW);
     Serial.println("✅ Emergency alarm deactivated");
-    Serial.println();
+    Serial.println("🔇 BUZZER: Alarm sequence completed");
     Serial.println();
 
     displayNeedsUpdate = true;
     return;
   }
 
-  // Handle beeping pattern
-  if (buzzerState) {
-    if (currentTime - lastBeepTime >= BEEP_ON_TIME) {
-      buzzerState = false;
-      digitalWrite(BUZZER, LOW);
-      lastBeepTime = currentTime;
+  // Enhanced beeping pattern with urgent phase
+  if (inUrgentPhase) {
+    // Urgent rapid beeps at the beginning
+    if (buzzerState) {
+      if (currentTime - lastBeepTime >= BEEP_ON_TIME) {
+        buzzerState = false;
+        digitalWrite(BUZZER, LOW);
+        lastBeepTime = currentTime;
+        urgentBeepsCompleted++;
+      }
+    } else {
+      if (currentTime - lastBeepTime >= BEEP_OFF_TIME) {
+        if (urgentBeepsCompleted < URGENT_BEEP_COUNT) {
+          buzzerState = true;
+          digitalWrite(BUZZER, HIGH);
+          lastBeepTime = currentTime;
+        } else {
+          // Transition to normal beeping pattern
+          inUrgentPhase = false;
+          buzzerState = false;
+          lastBeepTime = currentTime;
+          Serial.println("🔔 BUZZER: Switching to sustained alarm pattern");
+        }
+      }
     }
   } else {
-    if (currentTime - lastBeepTime >= BEEP_OFF_TIME) {
-      buzzerState = true;
-      digitalWrite(BUZZER, HIGH);
-      lastBeepTime = currentTime;
+    // Normal sustained beeping pattern
+    if (buzzerState) {
+      if (currentTime - lastBeepTime >= BEEP_ON_TIME) {
+        buzzerState = false;
+        digitalWrite(BUZZER, LOW);
+        lastBeepTime = currentTime;
+        beepCycleCount++;
+      }
+    } else {
+      // Add pause every few beeps for better attention
+      int pauseTime = (beepCycleCount % 3 == 0) ? PAUSE_BETWEEN_CYCLES : BEEP_OFF_TIME;
+      
+      if (currentTime - lastBeepTime >= pauseTime) {
+        buzzerState = true;
+        digitalWrite(BUZZER, HIGH);
+        lastBeepTime = currentTime;
+      }
     }
   }
 }

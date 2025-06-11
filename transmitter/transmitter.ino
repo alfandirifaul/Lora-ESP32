@@ -29,7 +29,6 @@
 // Motion Detection Settings
 const unsigned long MOTION_DELAY = 3000;        // Cooldown period (3 seconds)
 const unsigned long SENSOR_WARMUP = 15000;      // Sensor stabilization time (15 seconds)
-const unsigned long HEARTBEAT_INTERVAL = 30000; // Status ping interval (30 seconds)
 
 // LoRa Configuration
 const long FREQUENCY = 433E6;                   // 433MHz
@@ -43,7 +42,6 @@ const byte SYNC_WORD = 0xF3;                    // Network sync word
 // Motion Detection Variables
 int lastMotionState = LOW;
 unsigned long lastMotionTime = 0;
-unsigned long lastHeartbeat = 0;
 bool motionCooldown = false;
 bool systemReady = false;
 
@@ -204,9 +202,6 @@ void loop() {
   // Check for motion detection
   checkMotionSensor();
   
-  // Send periodic heartbeat
-  sendHeartbeat();
-  
   // Update system status
   updateSystemStatus();
   
@@ -257,6 +252,9 @@ bool sendMotionAlert() {
   
   LoRa.beginPacket();
   
+  // Get current date/time
+  String currentDateTime = getCurrentDateTime();
+  
   // Create structured message
   LoRa.print("{");
   LoRa.print("\"type\":\"MOTION\",");
@@ -269,6 +267,9 @@ bool sendMotionAlert() {
   LoRa.print("\"time\":");
   LoRa.print(millis());
   LoRa.print(",");
+  LoRa.print("\"datetime\":\"");
+  LoRa.print(currentDateTime);
+  LoRa.print("\",");
   LoRa.print("\"uptime\":");
   LoRa.print((millis() - systemStartTime) / 1000);
   LoRa.print("}");
@@ -282,6 +283,33 @@ bool sendMotionAlert() {
   }
   
   return success;
+}
+
+String getCurrentDateTime() {
+  // Calculate elapsed time since system start
+  unsigned long totalSeconds = (millis() - systemStartTime) / 1000;
+  
+  // Convert to days, hours, minutes, seconds
+  int days = totalSeconds / 86400;
+  totalSeconds %= 86400;
+  int hours = totalSeconds / 3600;
+  totalSeconds %= 3600;
+  int minutes = totalSeconds / 60;
+  int seconds = totalSeconds % 60;
+  
+  // Format as readable date/time string
+  String dateTime = "Day" + String(days + 1) + " ";
+  
+  if (hours < 10) dateTime += "0";
+  dateTime += String(hours) + ":";
+  
+  if (minutes < 10) dateTime += "0";
+  dateTime += String(minutes) + ":";
+  
+  if (seconds < 10) dateTime += "0";
+  dateTime += String(seconds);
+  
+  return dateTime;
 }
 
 void logMotionDetection(bool success) {
@@ -318,73 +346,6 @@ void endMotionCooldown() {
 // ═══════════════════════════════════════════════════════════
 //                    SYSTEM MONITORING
 // ═══════════════════════════════════════════════════════════
-
-void sendHeartbeat() {
-  if (millis() - lastHeartbeat < HEARTBEAT_INTERVAL) return;
-  
-  lastHeartbeat = millis();
-  
-  Serial.println("💓 SYSTEM HEARTBEAT");
-  Serial.println("────────────────────────────────────────");
-  
-  LoRa.beginPacket();
-  LoRa.print("{");
-  LoRa.print("\"type\":\"HEARTBEAT\",");
-  LoRa.print("\"id\":\"");
-  LoRa.print(deviceID);
-  LoRa.print("\",");
-  LoRa.print("\"uptime\":");
-  LoRa.print((millis() - systemStartTime) / 1000);
-  LoRa.print(",");
-  LoRa.print("\"motions\":");
-  LoRa.print(motionCounter);
-  LoRa.print(",");
-  LoRa.print("\"packets\":");
-  LoRa.print(packetsSent);
-  LoRa.print("}");
-  LoRa.endPacket();
-  
-  displaySystemStats();
-  Serial.println("────────────────────────────────────────\n");
-}
-
-void displaySystemStats() {
-  unsigned long uptime = (millis() - systemStartTime) / 1000;
-  
-  Serial.print("📈 Uptime: ");
-  if (uptime < 60) {
-    Serial.print(uptime);
-    Serial.println("s");
-  } else if (uptime < 3600) {
-    Serial.print(uptime / 60);
-    Serial.print("m ");
-    Serial.print(uptime % 60);
-    Serial.println("s");
-  } else {
-    Serial.print(uptime / 3600);
-    Serial.print("h ");
-    Serial.print((uptime % 3600) / 60);
-    Serial.print("m ");
-    Serial.print(uptime % 60);
-    Serial.println("s");
-  }
-  
-  Serial.print("🎯 Detections: ");
-  Serial.println(motionCounter);
-  
-  Serial.print("📡 Packets: ");
-  Serial.print(packetsSent);
-  Serial.print(" sent, ");
-  Serial.print(transmissionErrors);
-  Serial.println(" errors");
-  
-  if (packetsSent > 0) {
-    float successRate = ((float)(packetsSent) / (packetsSent + transmissionErrors)) * 100;
-    Serial.print("✅ Success Rate: ");
-    Serial.print(successRate, 1);
-    Serial.println("%");
-  }
-}
 
 void updateSystemStatus() {
   // Blink status LED to show system is alive

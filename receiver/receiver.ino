@@ -31,6 +31,22 @@
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
 // ═══════════════════════════════════════════════════════════
+//                    PROFESSIONAL LOGGING SYSTEM
+// ═══════════════════════════════════════════════════════════
+
+enum LogLevel {
+  LOG_DEBUG,
+  LOG_INFO,
+  LOG_WARNING,
+  LOG_ERROR,
+  LOG_CRITICAL
+};
+
+// Forward declarations
+class ProfessionalLogger;
+extern ProfessionalLogger logger;
+
+// ═══════════════════════════════════════════════════════════
 //                    SYSTEM STATE VARIABLES
 // ═══════════════════════════════════════════════════════════
 struct SystemState {
@@ -84,8 +100,239 @@ const String CHAT_ID = "7651348719";
 WiFiClientSecure client;
 UniversalTelegramBot bot(BOT_TOKEN, client);
 
-const unsigned long BOT_REQUEST_DELAY = 100;  // 100ms for responsiveness
+const unsigned long BOT_REQUEST_DELAY = 100;
 unsigned long lastBotUpdate = 0;
+
+// ═══════════════════════════════════════════════════════════
+//                    PROFESSIONAL LOGGING SYSTEM
+// ═══════════════════════════════════════════════════════════
+
+class ProfessionalLogger {
+private:
+  String deviceName;
+  unsigned long bootTime;
+  int logCounter;
+  
+public:
+  ProfessionalLogger() : deviceName("UNKNOWN"), bootTime(millis()), logCounter(0) {}
+  ProfessionalLogger(String name) : deviceName(name), bootTime(millis()), logCounter(0) {}
+  
+  void init() {
+    Serial.println("\n╔══════════════════════════════════════════════════════════════╗");
+    Serial.println("║                    PROFESSIONAL LOGGING SYSTEM               ║");
+    Serial.println("║                     Motion Detection Receiver                ║");
+    Serial.println("╠══════════════════════════════════════════════════════════════╣");
+    Serial.printf("║ Device ID: %-49s ║\n", deviceName.c_str());
+    Serial.printf("║ Boot Time: %-49s ║\n", getFormattedTime().c_str());
+    Serial.printf("║ Version: %-51s ║\n", "v3.0 Professional Edition");
+    Serial.println("╚══════════════════════════════════════════════════════════════╝");
+    Serial.println();
+  }
+  
+  void setDeviceName(String name) {
+    deviceName = name;
+  }
+  
+  void log(LogLevel level, String category, String message, String data = "") {
+    logCounter++;
+    String timestamp = getFormattedTime();
+    String levelStr = getLevelString(level);
+    String levelIcon = getLevelIcon(level);
+    
+    Serial.printf("[%s] %s [%s] %s: %s\n", 
+                  timestamp.c_str(), 
+                  levelIcon.c_str(), 
+                  category.c_str(), 
+                  levelStr.c_str(), 
+                  message.c_str());
+    
+    if (data.length() > 0) {
+      Serial.printf("    └─ Data: %s\n", data.c_str());
+    }
+  }
+  
+  void logMotionEvent(int alertNumber, String rssi, String sensorData) {
+    String separator = "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━";
+    
+    Serial.println(separator);
+    Serial.printf("🚨 MOTION ALERT RECEIVED #%d\n", alertNumber);
+    Serial.println(separator);
+    
+    log(LOG_CRITICAL, "MOTION", "Motion detection alert received", sensorData);
+    log(LOG_INFO, "SIGNAL", "Signal strength recorded", "RSSI: " + rssi + " dBm");
+    
+    Serial.printf("┌─ Alert Details ────────────────────────────────────────────┐\n");
+    Serial.printf("│ Alert Number: %-44d │\n", alertNumber);
+    Serial.printf("│ Signal Strength: %-39s │\n", (rssi + " dBm").c_str());
+    Serial.printf("│ Reception Time: %-40s │\n", getCurrentTime().c_str());
+    Serial.printf("│ System Uptime: %-41s │\n", formatUptime((millis() - bootTime) / 1000).c_str());
+    Serial.printf("└────────────────────────────────────────────────────────────┘\n");
+  }
+  
+  void logAlarmSequence(String action, String details = "") {
+    LogLevel level = action.indexOf("ACTIVATED") >= 0 ? LOG_CRITICAL : LOG_INFO;
+    log(level, "ALARM", "Emergency alarm " + action, details);
+    
+    if (action.indexOf("ACTIVATED") >= 0) {
+      Serial.printf("┌─ ALARM SEQUENCE ───────────────────────────────────────────┐\n");
+      Serial.printf("│ Status: %-51s │\n", "🚨 ACTIVATED");
+      Serial.printf("│ Duration: %-47s │\n", "5 seconds");
+      Serial.printf("│ Buzzer: %-50s │\n", "Active");
+      Serial.printf("│ Notification: %-42s │\n", "Telegram sent");
+      Serial.printf("└────────────────────────────────────────────────────────────┘\n");
+    }
+  }
+  
+  void logTelegramEvent(String event, bool success, String details = "") {
+    LogLevel level = success ? LOG_INFO : LOG_ERROR;
+    String status = success ? "SUCCESS" : "FAILED";
+    log(level, "TELEGRAM", event + " - " + status, details);
+  }
+  
+  void logSystemStats() {
+    unsigned long uptime = (millis() - bootTime) / 1000;
+    
+    Serial.printf("┌─ System Performance ───────────────────────────────────────┐\n");
+    Serial.printf("│ Total Detections: %-37d │\n", state.motionCount);
+    Serial.printf("│ System Uptime: %-41s │\n", formatUptime(uptime).c_str());
+    Serial.printf("│ Memory Usage: %-42s │\n", getMemoryUsage().c_str());
+    Serial.printf("│ WiFi Status: %-43s │\n", WiFi.status() == WL_CONNECTED ? "Connected" : "Disconnected");
+    Serial.printf("│ LoRa Status: %-43s │\n", "Active");
+    Serial.printf("└────────────────────────────────────────────────────────────┘\n");
+  }
+  
+  void logStatusUpdate(String transmitterId, bool busy, bool alarm, bool ready) {
+    String statusData = "Busy: " + String(busy ? "YES" : "NO") + 
+                       ", Alarm: " + String(alarm ? "YES" : "NO") + 
+                       ", Ready: " + String(ready ? "YES" : "NO");
+    
+    log(LOG_INFO, "STATUS", "Status update sent to " + transmitterId, statusData);
+  }
+
+private:
+  String getFormattedTime() {
+    unsigned long totalSeconds = (millis() - bootTime) / 1000;
+    unsigned long hours = totalSeconds / 3600;
+    unsigned long minutes = (totalSeconds % 3600) / 60;
+    unsigned long seconds = totalSeconds % 60;
+    
+    char timeStr[20];
+    sprintf(timeStr, "%02lu:%02lu:%02lu", hours, minutes, seconds);
+    return String(timeStr);
+  }
+  
+  String getLevelString(LogLevel level) {
+    switch (level) {
+      case LOG_DEBUG: return "DEBUG";
+      case LOG_INFO: return "INFO ";
+      case LOG_WARNING: return "WARN ";
+      case LOG_ERROR: return "ERROR";
+      case LOG_CRITICAL: return "CRIT ";
+      default: return "UNKN ";
+    }
+  }
+  
+  String getLevelIcon(LogLevel level) {
+    switch (level) {
+      case LOG_DEBUG: return "🔍";
+      case LOG_INFO: return "ℹ️ ";
+      case LOG_WARNING: return "⚠️ ";
+      case LOG_ERROR: return "❌";
+      case LOG_CRITICAL: return "🚨";
+      default: return "❓";
+    }
+  }
+  
+  String formatUptime(unsigned long seconds) {
+    if (seconds < 60) return String(seconds) + "s";
+    if (seconds < 3600) return String(seconds/60) + "m " + String(seconds%60) + "s";
+    return String(seconds/3600) + "h " + String((seconds%3600)/60) + "m";
+  }
+  
+  String getMemoryUsage() {
+    uint32_t freeHeap = ESP.getFreeHeap();
+    uint32_t totalHeap = ESP.getHeapSize();
+    uint32_t usedHeap = totalHeap - freeHeap;
+    float usage = ((float)usedHeap / totalHeap) * 100;
+    
+    return String(usage, 1) + "% (" + String(usedHeap) + "/" + String(totalHeap) + ")";
+  }
+  
+  String getCurrentTime() {
+    unsigned long currentTime = (millis() - bootTime) / 1000;
+    int hours = (currentTime / 3600) % 24;
+    int minutes = (currentTime / 60) % 60;
+    int seconds = currentTime % 60;
+    
+    return String(hours) + ":" + 
+           (minutes < 10 ? "0" : "") + String(minutes) + ":" + 
+           (seconds < 10 ? "0" : "") + String(seconds);
+  }
+};
+
+// Global logger instance
+ProfessionalLogger logger;
+
+// ═══════════════════════════════════════════════════════════
+//                    UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════════════════
+
+String getCurrentTime() {
+  unsigned long currentTime = (millis() - state.systemStartTime) / 1000;
+  int hours = (currentTime / 3600) % 24;
+  int minutes = (currentTime / 60) % 60;
+  int seconds = currentTime % 60;
+  
+  return String(hours) + ":" + 
+         (minutes < 10 ? "0" : "") + String(minutes) + ":" + 
+         (seconds < 10 ? "0" : "") + String(seconds);
+}
+
+String formatUptime(unsigned long seconds) {
+  if (seconds < 60) return String(seconds) + "s";
+  if (seconds < 3600) return String(seconds/60) + "m " + String(seconds%60) + "s";
+  return String(seconds/3600) + "h " + String((seconds%3600)/60) + "m";
+}
+
+// ═══════════════════════════════════════════════════════════
+//                    DISPLAY FUNCTIONS
+// ═══════════════════════════════════════════════════════════
+
+void showStartupScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("LoRa Motion System");
+  display.println("==================");
+  display.println("Initializing...");
+  display.println("");
+  display.printf("Device: %s", state.receiverID.c_str());
+  display.display();
+}
+
+void showInitializingScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("Initializing LoRa...");
+  display.display();
+}
+
+void showReadyScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("System Ready!");
+  display.println("==============");
+  display.printf("ID: %s\n", state.receiverID.c_str());
+  display.printf("WiFi: Connected\n");
+  display.printf("LoRa: Active\n");
+  display.println("Monitoring...");
+  display.display();
+}
 
 // ═══════════════════════════════════════════════════════════
 //                    INTERRUPT SERVICE ROUTINE
@@ -97,94 +344,10 @@ void IRAM_ATTR onLoRaReceive(int packetSize) {
 // ═══════════════════════════════════════════════════════════
 //                    INITIALIZATION FUNCTIONS
 // ═══════════════════════════════════════════════════════════
-void setup() {
-  Serial.begin(115200);
-  while (!Serial) delay(10);
-  
-  Serial.println("🚀 LoRa Motion Detection System Starting...");
-  Serial.println("==========================================");
-  
-  state.systemStartTime = millis();
-  
-  initializeHardware();
-  initializeWiFi();
-  initializeTelegram();
-  initializeLoRa();
-  initializeReceiverID();
-  
-  showReadyScreen();
-  Serial.println("✅ System Ready - Real-Time Monitoring Active!");
-}
-
-void initializeHardware() {
-  // Initialize pins
-  pinMode(BUZZER_PIN, OUTPUT);
-  digitalWrite(BUZZER_PIN, LOW);
-  
-  // Initialize I2C and OLED
-  Wire.begin();
-  Serial.println("📺 Initializing OLED Display...");
-  
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
-      Serial.println("❌ OLED Display not found!");
-    } else {
-      Serial.println("✅ OLED found at 0x3D");
-    }
-  } else {
-    Serial.println("✅ OLED found at 0x3C");
-  }
-  
-  showStartupScreen();
-}
-
-void initializeWiFi() {
-  Serial.println("🌐 Connecting to WiFi...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  
-  Serial.println("\n✅ WiFi Connected!");
-  Serial.print("IP Address: ");
-  Serial.println(WiFi.localIP());
-}
-
-void initializeTelegram() {
-  client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
-  Serial.println("✅ Telegram Bot Initialized");
-}
-
-void initializeLoRa() {
-  Serial.println("📡 Initializing LoRa Module...");
-  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
-  
-  while (!LoRa.begin(433E6)) {
-    Serial.print(".");
-    showInitializingScreen();
-    delay(500);
-  }
-  
-  // Configure LoRa for optimal performance
-  LoRa.setSyncWord(0xF3);
-  LoRa.setSpreadingFactor(7);
-  LoRa.setSignalBandwidth(125E3);
-  LoRa.setCodingRate4(5);
-  LoRa.setPreambleLength(6);
-  
-  // Enable interrupt-driven reception
-  LoRa.onReceive(onLoRaReceive);
-  LoRa.receive();
-  
-  Serial.println("✅ LoRa Module Ready!");
-}
 
 void initializeReceiverID() {
   Serial.print("🆔 Generating receiver ID... ");
   
-  // Get MAC address for unique ID
   WiFi.mode(WIFI_STA);
   String mac = WiFi.macAddress();
   state.receiverID = "RX-" + mac.substring(12);
@@ -195,73 +358,156 @@ void initializeReceiverID() {
   Serial.println(")");
 }
 
+void initializeHardware() {
+  logger.log(LOG_INFO, "HARDWARE", "Initializing hardware components", "");
+  
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
+  
+  Wire.begin();
+  Serial.println("📺 Initializing OLED Display...");
+  
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3D)) {
+      logger.log(LOG_ERROR, "HARDWARE", "OLED Display not found", "Tried addresses 0x3C and 0x3D");
+      Serial.println("❌ OLED Display not found!");
+    } else {
+      logger.log(LOG_INFO, "HARDWARE", "OLED Display initialized", "Address: 0x3D");
+      Serial.println("✅ OLED found at 0x3D");
+    }
+  } else {
+    logger.log(LOG_INFO, "HARDWARE", "OLED Display initialized", "Address: 0x3C");
+    Serial.println("✅ OLED found at 0x3C");
+  }
+  
+  showStartupScreen();
+}
+
+void initializeWiFi() {
+  logger.log(LOG_INFO, "NETWORK", "Connecting to WiFi", "SSID: " + String(WIFI_SSID));
+  Serial.println("🌐 Connecting to WiFi...");
+  
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  logger.log(LOG_INFO, "NETWORK", "WiFi connected successfully", "IP: " + WiFi.localIP().toString());
+  Serial.println("\n✅ WiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+}
+
+void initializeTelegram() {
+  logger.log(LOG_INFO, "TELEGRAM", "Initializing Telegram bot", "");
+  client.setCACert(TELEGRAM_CERTIFICATE_ROOT);
+  Serial.println("✅ Telegram Bot Initialized");
+}
+
+void initializeLoRa() {
+  logger.log(LOG_INFO, "NETWORK", "Initializing LoRa module", "");
+  Serial.println("📡 Initializing LoRa Module...");
+  
+  LoRa.setPins(LORA_SS, LORA_RST, LORA_DIO0);
+  
+  while (!LoRa.begin(433E6)) {
+    Serial.print(".");
+    showInitializingScreen();
+    delay(500);
+  }
+  
+  LoRa.setSyncWord(0xF3);
+  LoRa.setSpreadingFactor(7);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(5);
+  LoRa.setPreambleLength(6);
+  
+  LoRa.onReceive(onLoRaReceive);
+  LoRa.receive();
+  
+  logger.log(LOG_INFO, "NETWORK", "LoRa module ready", "Frequency: 433MHz, SF: 7");
+  Serial.println("✅ LoRa Module Ready!");
+}
+
+// ═══════════════════════════════════════════════════════════
+//                    MAIN SETUP FUNCTION
+// ═══════════════════════════════════════════════════════════
+
+void setup() {
+  Serial.begin(115200);
+  while (!Serial) delay(10);
+  
+  Serial.println("🚀 LoRa Motion Detection System Starting...");
+  Serial.println("==========================================");
+  
+  state.systemStartTime = millis();
+  
+  initializeReceiverID();
+  logger.setDeviceName(state.receiverID);
+  logger.init();
+  
+  logger.log(LOG_INFO, "SYSTEM", "Starting receiver initialization", "");
+  
+  initializeHardware();
+  initializeWiFi();
+  initializeTelegram();
+  initializeLoRa();
+  
+  showReadyScreen();
+  logger.log(LOG_INFO, "SYSTEM", "System ready for monitoring", "All components operational");
+  logger.logSystemStats();
+}
+
+// ═══════════════════════════════════════════════════════════
+//                    MAIN LOOP FUNCTION
+// ═══════════════════════════════════════════════════════════
+
+void loop() {
+  processReceivedPacket();
+  sendReceiverStatus();
+  updateDisplay();
+  delay(50);
+}
+
 // ═══════════════════════════════════════════════════════════
 //                    PACKET PROCESSING
 // ═══════════════════════════════════════════════════════════
+
 void processReceivedPacket() {
   if (!state.packetReceived) return;
   
-  // Check if we need to handle status requests
   String message = "";
   while (LoRa.available()) {
     message += (char)LoRa.read();
   }
   
-  // Handle status requests from transmitter
-  if (message.indexOf("\"type\":\"STATUS_REQUEST\"") > -1) {
-    Serial.println("📞 Status request received from transmitter");
-    state.statusChanged = true; // Force status send
-    sendReceiverStatus();
-    state.packetReceived = false;
-    return;
-  }
+  logger.log(LOG_DEBUG, "NETWORK", "Packet received", "Length: " + String(message.length()) + " bytes");
   
-  // Handle motion detection packets
   if (message.indexOf("\"type\":\"MOTION\"") > -1) {
-    // Set system as busy while processing
-    bool wasReady = state.isReady;
-    bool wasBusy = state.isBusy;
-    
-    state.isBusy = true;
-    state.isReady = false;
-    
-    // Send immediate status update if state changed
-    if (state.isBusy != wasBusy || state.isReady != wasReady) {
-      Serial.println("🔄 Processing state changed - sending status update");
-      sendReceiverStatus();
-    }
-    
-    // Process the motion detection data
     state.motionCount++;
     state.lastMotionTime = millis();
     state.lastRSSI = String(LoRa.packetRssi());
     state.lastMessage = message;
     
-    // Start emergency alarm
+    logger.logMotionEvent(state.motionCount, state.lastRSSI, message);
+    
+    state.isBusy = true;
+    state.isReady = false;
+    
+    logger.logAlarmSequence("ACTIVATED", "Motion detection triggered");
     startEmergencyAlarm();
     
-    // Send Telegram alert
+    logger.log(LOG_INFO, "TELEGRAM", "Sending motion alert", "Alert #" + String(state.motionCount));
     sendTelegramAlert();
     
-    // Update display
     state.displayNeedsUpdate = true;
     
-    Serial.println("🚨 MOTION DETECTED | Alert #" + String(state.motionCount));
-    Serial.printf("📨 Message: %s\n", state.lastMessage.c_str());
-    Serial.printf("📶 RSSI: %s dBm\n", state.lastRSSI.c_str());
-    Serial.printf("⏱️ Processing time: %lums\n", millis() - state.lastMotionTime);
-    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    state.isBusy = false;
+    state.isReady = true;
     
-    // System becomes ready again after processing
-    bool newReady = true;
-    bool newBusy = false;
-    
-    if (state.isReady != newReady || state.isBusy != newBusy) {
-      state.isReady = newReady;
-      state.isBusy = newBusy;
-      Serial.println("✅ Processing complete - sending ready status");
-      sendReceiverStatus();
-    }
+    logger.logStatusUpdate("TRANSMITTER", state.isBusy, state.alarmActive, state.isReady);
   }
   
   state.packetReceived = false;
@@ -270,22 +516,19 @@ void processReceivedPacket() {
 // ═══════════════════════════════════════════════════════════
 //                    RECEIVER STATUS FUNCTIONS
 // ═══════════════════════════════════════════════════════════
+
 void sendReceiverStatus() {
-  // Check if any status has changed
   bool hasChanged = (state.isBusy != state.prevBusy) ||
                     (state.alarmActive != state.prevAlarmActive) ||
                     (state.isReady != state.prevReady) ||
                     state.statusChanged;
   
-  // Send heartbeat every 30 seconds even if no changes
   bool heartbeatTime = (millis() - state.lastStatusSent) > state.statusInterval;
   
-  // Only send if there's a change or it's heartbeat time
   if (!hasChanged && !heartbeatTime) {
     return;
   }
   
-  // Create status message
   String statusMessage = "{";
   statusMessage += "\"type\":\"STATUS\",";
   statusMessage += "\"id\":\"" + state.receiverID + "\",";
@@ -295,7 +538,6 @@ void sendReceiverStatus() {
   statusMessage += "\"time\":" + String(millis());
   statusMessage += "}";
   
-  // Send status to transmitter
   LoRa.beginPacket();
   LoRa.print(statusMessage);
   bool success = LoRa.endPacket();
@@ -313,7 +555,6 @@ void sendReceiverStatus() {
                   state.isReady ? "YES" : "NO",
                   (state.isReady != state.prevReady) ? " [CHANGED]" : "");
     
-    // Update previous state values
     state.prevBusy = state.isBusy;
     state.prevAlarmActive = state.alarmActive;
     state.prevReady = state.isReady;
@@ -324,15 +565,14 @@ void sendReceiverStatus() {
     Serial.println("❌ Failed to send status update");
   }
   
-  // Resume listening
   LoRa.receive();
 }
 
 // ═══════════════════════════════════════════════════════════
-//                    EMERGENCY ALARM SYSTEM (FIXED)
+//                    EMERGENCY ALARM SYSTEM
 // ═══════════════════════════════════════════════════════════
+
 void startEmergencyAlarm() {
-  // Update alarm state
   bool wasAlarmActive = state.alarmActive;
   bool wasReady = state.isReady;
   
@@ -342,45 +582,36 @@ void startEmergencyAlarm() {
   
   Serial.println("🚨 EMERGENCY ALARM ACTIVATED!");
   
-  // Send immediate status update when alarm state changes
   if (state.alarmActive != wasAlarmActive || state.isReady != wasReady) {
     Serial.println("🚨 Alarm state changed - sending status update");
     sendReceiverStatus();
   }
   
-  // Alarm sequence - reduced status updates during alarm
   bool stateBuzzer = false;
   for (int count = 0; count < 25; count++) {
     stateBuzzer = !stateBuzzer;
     digitalWrite(BUZZER_PIN, stateBuzzer);
     delay(200);
     
-    // Only send status update if someone requests it during alarm
     if (state.statusChanged) {
       sendReceiverStatus();
     }
   }
   
-  // End alarm and update state
   digitalWrite(BUZZER_PIN, LOW);
-  bool newAlarmActive = false;
-  bool newReady = true;
+  state.alarmActive = false;
+  state.isReady = true;
   state.buzzerState = false;
   
   Serial.println("✅ Emergency alarm deactivated");
-  
-  // Send status update when alarm ends
-  if (state.alarmActive != newAlarmActive || state.isReady != newReady) {
-    state.alarmActive = newAlarmActive;
-    state.isReady = newReady;
-    Serial.println("✅ Alarm deactivated - sending ready status");
-    sendReceiverStatus();
-  }
+  Serial.println("✅ Alarm deactivated - sending ready status");
+  sendReceiverStatus();
 }
 
 // ═══════════════════════════════════════════════════════════
 //                    TELEGRAM FUNCTIONS
 // ═══════════════════════════════════════════════════════════
+
 void sendTelegramAlert() {
   String timestamp = getCurrentTime();
   String alertMessage = 
@@ -400,373 +631,28 @@ void sendTelegramAlert() {
 
   bool success = bot.sendMessage(CHAT_ID, alertMessage, "Markdown");
   
-  if (success) {
-    Serial.println("📱 Telegram alert sent successfully!");
-  } else {
-    Serial.println("❌ Failed to send Telegram alert");
-    // Retry once
-    delay(100);
-    bot.sendMessage(CHAT_ID, alertMessage, "Markdown");
-  }
-}
-
-void handleTelegramMessages() {
-  if (millis() - lastBotUpdate < BOT_REQUEST_DELAY) return;
-  
-  int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
-  
-  for (int i = 0; i < numNewMessages; i++) {
-    String chat_id = String(bot.messages[i].chat_id);
-    if (chat_id != CHAT_ID) {
-      Serial.println("❌ Unauthorized access attempt");
-      continue;
-    }
-    
-    String text = bot.messages[i].text;
-    processTelegramCommand(text);
-  }
-  
-  lastBotUpdate = millis();
-}
-
-void processTelegramCommand(const String& command) {
-  if (command == "/start") {
-    sendWelcomeMessage();
-  } else if (command == "/status") {
-    sendStatusMessage();
-  } else if (command == "/stats") {
-    sendStatsMessage();
-  } else if (command == "/test") {
-    sendTestMessage();
-  } else if (command == "/help") {
-    sendHelpMessage();
-  } else if (command == "/info") {
-    sendInfoMessage();
-  } else {
-    sendUnknownCommandMessage();
-  }
-}
-
-void sendWelcomeMessage() {
-  String message = 
-    "🚀 *WELCOME TO MOTION SECURITY SYSTEM*\n\n"
-    "🔐 *Real-Time LoRa Security System*\n"
-    "📡 Status: Active & Monitoring\n"
-    "⚡ Mode: Real-Time Detection\n\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━\n"
-    "📋 *AVAILABLE COMMANDS:*\n"
-    "• /status - System status\n"
-    "• /stats - Detection statistics\n"
-    "• /test - Test connection\n"
-    "• /help - Full guide\n"
-    "• /info - Device information\n"
-    "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-    "✅ *System ready for real-time protection!*\n"
-    "⚡ _Instant notifications when motion detected_";
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
-}
-
-void sendStatusMessage() {
-  unsigned long uptime = (millis() - state.systemStartTime) / 1000;
-  String message = 
-    "📊 *REAL-TIME SYSTEM STATUS*\n\n"
-    "🟢 *Online & Active*\n"
-    "📡 LoRa: Interrupt-Driven\n"
-    "🔋 Power: Normal\n"
-    "📺 Display: Functional\n"
-    "⚡ Response: <100ms\n\n"
-    "⏰ *Uptime:* " + formatUptime(uptime) + "\n"
-    "🎯 *Total Detections:* " + String(state.motionCount) + "\n"
-    "📶 *Last RSSI:* " + (state.motionCount > 0 ? state.lastRSSI + " dBm" : "Standby") + "\n\n"
-    "✅ _Real-time monitoring active_";
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
-}
-
-void sendStatsMessage() {
-  String message = 
-    "📈 *MOTION DETECTION STATISTICS*\n\n"
-    "🔢 *Total Detections:* " + String(state.motionCount) + "\n"
-    "🕐 *Last Detection:* " + (state.motionCount > 0 ? getLastDetectionTime() : "None yet") + "\n"
-    "📶 *Signal Quality:*\n"
-    "   • Strongest: " + (state.motionCount > 0 ? String(state.maxRSSI) + " dBm" : "N/A") + "\n"
-    "   • Weakest: " + (state.motionCount > 0 ? String(state.minRSSI) + " dBm" : "N/A") + "\n\n"
-    "📊 *System Performance:*\n"
-    "   • Uptime: " + formatUptime((millis() - state.systemStartTime) / 1000) + "\n"
-    "   • Status: Optimal\n"
-    "   • Mode: Active Monitoring";
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
-}
-
-void sendTestMessage() {
-  String message = 
-    "⚡ *REAL-TIME CONNECTION TEST*\n\n"
-    "✅ Telegram Connection: OK\n"
-    "📡 LoRa Module: Active\n"
-    "🔋 System: Normal\n"
-    "⏱️ Response Time: <100ms\n\n"
-    "🎯 *System ready for real-time detection!*";
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
-}
-
-void sendHelpMessage() {
-  String message = 
-    "📖 *LORA SECURITY SYSTEM GUIDE*\n\n"
-    "🤖 *About:*\n"
-    "Automated security system that sends real-time notifications when motion is detected in monitored areas.\n\n"
-    "🎛️ *Available Commands:*\n\n"
-    "• `/start` - Start the bot\n"
-    "• `/status` - Check system condition\n"
-    "• `/stats` - View complete statistics\n"
-    "• `/help` - This guide\n"
-    "• `/info` - Device details\n\n"
-    "🔔 *Automatic Notifications:*\n"
-    "Bot will send automatic alerts containing:\n"
-    "• Detection time\n"
-    "• Event number\n"
-    "• Signal strength\n"
-    "• Sensor data\n\n"
-    "📞 *Support:* Check system logs";
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
-}
-
-void sendInfoMessage() {
-  String message = 
-    "🔧 *DEVICE INFORMATION*\n\n"
-    "📡 *LoRa Specifications:*\n"
-    "   • Frequency: 433 MHz\n"
-    "   • Range: Long Distance\n"
-    "   • Sync Word: 0xF3\n\n"
-    "🖥️ *Hardware:*\n"
-    "   • MCU: ESP32\n"
-    "   • Display: OLED 128x64\n"
-    "   • Sensor: Motion Detection\n"
-    "   • Alarm: Active Buzzer\n\n"
-    "💾 *Software:*\n"
-    "   • Version: Clean v1.0\n"
-    "   • Build: Professional Edition\n\n"
-    "🌐 *Connectivity:*\n"
-    "   • WiFi: Connected\n"
-    "   • Telegram API: Active\n"
-    "   • IP: " + WiFi.localIP().toString();
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
-}
-
-void sendUnknownCommandMessage() {
-  String message = 
-    "❓ *Unknown Command*\n\n"
-    "Please use one of these commands:\n"
-    "• /status - System status\n"
-    "• /stats - Detection statistics\n"
-    "• /help - Complete guide\n"
-    "• /info - Device information\n\n"
-    "💡 _Type /help for complete guide_";
-  
-  bot.sendMessage(CHAT_ID, message, "Markdown");
+  logger.logTelegramEvent("Motion alert", success, success ? "Message delivered" : "Delivery failed");
 }
 
 // ═══════════════════════════════════════════════════════════
-//                    DISPLAY FUNCTIONS
+//                    DISPLAY UPDATE
 // ═══════════════════════════════════════════════════════════
-void showStartupScreen() {
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(15, 10);
-  display.println("MOTION");
-  display.setCursor(5, 30);
-  display.println("DETECTOR");
-  display.setTextSize(1);
-  display.setCursor(45, 50);
-  display.println("v1.0");
-  display.display();
-  delay(2000);
-}
-
-void showInitializingScreen() {
-  static int dots = 0;
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(20, 20);
-  display.println("Initializing");
-  display.setCursor(25, 35);
-  display.print("LoRa Module");
-  for (int i = 0; i < dots; i++) {
-    display.print(".");
-  }
-  display.display();
-  dots = (dots + 1) % 4;
-}
-
-void showReadyScreen() {
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("MOTION DETECTION SYSTEM");
-  display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
-  display.setCursor(0, 15);
-  display.println("Status: READY");
-  display.setCursor(0, 25);
-  display.println("Frequency: 433MHz");
-  display.setCursor(0, 35);
-  display.println("Range: Long Distance");
-  display.setCursor(0, 45);
-  display.println("Mode: Monitoring");
-  display.display();
-  delay(2000);
-}
 
 void updateDisplay() {
   if (!state.displayNeedsUpdate) return;
   
   display.clearDisplay();
-  
-  // Header
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.print("MOTION LOGGER ");
   
-  // Status indicator
-  if (state.alarmActive) {
-    display.print(millis() % 500 < 250 ? "ALARM!" : "      ");
-  } else {
-    const char* indicators[] = { "●", "◐", "○", "◑" };
-    display.print(indicators[state.animationFrame]);
-  }
-  
-  display.drawLine(0, 10, 128, 10, SSD1306_WHITE);
-  
-  if (state.alarmActive) {
-    showAlarmDisplay();
-  } else {
-    showNormalDisplay();
-  }
+  display.printf("LoRa Motion System\n");
+  display.printf("==================\n");
+  display.printf("Alerts: %d\n", state.motionCount);
+  display.printf("Uptime: %s\n", formatUptime((millis() - state.systemStartTime)/1000).c_str());
+  display.printf("RSSI: %s dBm\n", state.lastRSSI.c_str());
+  display.printf("Status: %s\n", state.isReady ? "Ready" : "Busy");
   
   display.display();
   state.displayNeedsUpdate = false;
-}
-
-void showAlarmDisplay() {
-  display.setTextSize(2);
-  display.setCursor(10, 18);
-  display.println("MOTION!");
-  
-  display.setTextSize(1);
-  display.setCursor(0, 38);
-  display.printf("Alert #%d | RSSI: %sdBm", state.motionCount, state.lastRSSI.c_str());
-  
-  display.setCursor(0, 48);
-  display.printf("BUZZER: %s", state.buzzerState ? "ON " : "OFF");
-}
-
-void showNormalDisplay() {
-  display.setTextSize(1);
-  display.setCursor(0, 13);
-  display.printf("Detections: %d", state.motionCount);
-  
-  display.setCursor(0, 23);
-  display.printf("Uptime: %s", formatUptime((millis() - state.systemStartTime) / 1000).c_str());
-  
-  if (state.motionCount > 0) {
-    display.setCursor(0, 33);
-    display.printf("Last: %s", getLastDetectionTime().c_str());
-    
-    display.setCursor(0, 43);
-    display.printf("Signal: %s dBm", state.lastRSSI.c_str());
-    
-    // Signal strength bar
-    display.setCursor(0, 53);
-    int rssiValue = state.lastRSSI.toInt();
-    int barLength = map(constrain(rssiValue, -120, -30), -120, -30, 0, 80);
-    display.print("[");
-    for (int i = 0; i < 10; i++) {
-      display.print(i < barLength / 8 ? "=" : "-");
-    }
-    display.print("]");
-  } else {
-    display.setCursor(20, 40);
-    display.println("Waiting for");
-    display.setCursor(30, 50);
-    display.println("motion...");
-  }
-}
-
-void updateAnimation() {
-  if (millis() - state.lastAnimationTime > 500) {
-    state.animationFrame = (state.animationFrame + 1) % 4;
-    state.lastAnimationTime = millis();
-    if (!state.alarmActive) state.displayNeedsUpdate = true;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-//                    UTILITY FUNCTIONS
-// ═══════════════════════════════════════════════════════════
-String getCurrentTime() {
-  unsigned long currentTime = millis() / 1000;
-  int hours = (currentTime / 3600) % 24;
-  int minutes = (currentTime / 60) % 60;
-  int seconds = currentTime % 60;
-  
-  return String(hours) + ":" + 
-         (minutes < 10 ? "0" : "") + String(minutes) + ":" + 
-         (seconds < 10 ? "0" : "") + String(seconds);
-}
-
-String formatUptime(unsigned long seconds) {
-  if (seconds < 60) {
-    return String(seconds) + "s";
-  } else if (seconds < 3600) {
-    return String(seconds / 60) + "m " + String(seconds % 60) + "s";
-  } else {
-    return String(seconds / 3600) + "h " + String((seconds % 3600) / 60) + "m";
-  }
-}
-
-String getLastDetectionTime() {
-  if (state.motionCount == 0) return "No detections";
-  
-  unsigned long timeSince = (millis() - state.lastMotionTime) / 1000;
-  if (timeSince < 60) {
-    return String(timeSince) + "s ago";
-  } else if (timeSince < 3600) {
-    return String(timeSince / 60) + "m ago";
-  } else {
-    return String(timeSince / 3600) + "h ago";
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-//                    MAIN LOOP
-// ═══════════════════════════════════════════════════════════
-void loop() {
-  // Priority 1: Process LoRa packets immediately
-  processReceivedPacket();
-  
-  // Priority 2: Send status only when changed or heartbeat needed
-  sendReceiverStatus();
-  
-  // Priority 3: Handle Telegram communications
-  handleTelegramMessages();
-  
-  // Priority 4: Update display and animations
-  updateAnimation();
-  updateDisplay();
-  
-  // Minimal delay for system stability
-  delay(1);
-}
-
-// Add a function to manually trigger status update if needed
-void forceStatusUpdate() {
-  state.statusChanged = true;
-  sendReceiverStatus();
 }

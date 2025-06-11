@@ -20,7 +20,7 @@
 // Sensor & Indicator Configuration
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
 #define LED_PIN 13        // Status LED GPIO
-#define STATUS_LED 12      // Built-in LED (ESP32)
+#define STATUS_LED 2      // Built-in LED (ESP32)
 
 // ═══════════════════════════════════════════════════════════
 //                    SYSTEM PARAMETERS
@@ -34,6 +34,26 @@ const unsigned long SENSOR_WARMUP = 15000;      // Sensor stabilization time (15
 const long FREQUENCY = 433E6;                   // 433MHz
 const int TX_POWER = 20;                        // Transmission power
 const byte SYNC_WORD = 0xF3;                    // Network sync word
+
+// Queue Configuration
+const int MAX_QUEUE_SIZE = 10;                  // Maximum queued messages
+const unsigned long RETRY_INTERVAL = 5000;     // Retry transmission every 5 seconds
+const int MAX_RETRY_ATTEMPTS = 3;               // Maximum retry attempts per message
+
+// ═══════════════════════════════════════════════════════════
+//                    QUEUE STRUCTURE
+// ═══════════════════════════════════════════════════════════
+
+struct QueuedMessage {
+  String type;
+  String deviceId;
+  int count;
+  unsigned long timestamp;
+  String datetime;
+  unsigned long uptime;
+  int retryCount;
+  bool isValid;
+};
 
 // ═══════════════════════════════════════════════════════════
 //                    GLOBAL VARIABLES
@@ -52,23 +72,14 @@ int packetsSent = 0;
 int transmissionErrors = 0;
 String deviceID = "";
 
-// Add these variables for better status tracking
-unsigned long lastStatusRequest = 0;
-unsigned long statusRequestInterval = 10000; // Request status every 10 seconds if no updates
-
-// ═══════════════════════════════════════════════════════════
-//                    RECEIVER STATE TRACKING
-// ═══════════════════════════════════════════════════════════
-
-// Receiver state tracking
-struct ReceiverState {
-  bool isOnline = false;
-  bool isReady = false;
-  bool isBusy = false;
-  bool alarmActive = false;
-  unsigned long lastStatusReceived = 0;
-  String receiverID = "";
-} receiverState;
+// Queue Management
+QueuedMessage messageQueue[MAX_QUEUE_SIZE];
+int queueHead = 0;
+int queueTail = 0;
+int queueSize = 0;
+unsigned long lastRetryTime = 0;
+int queuedMessages = 0;
+int retriedMessages = 0;
 
 // ═══════════════════════════════════════════════════════════
 //                    INITIALIZATION FUNCTIONS
@@ -92,6 +103,10 @@ void initializeSystem() {
   
   // Initialize device identification
   initializeDeviceID();
+  
+  // Initialize message queue
+  initializeQueue();
+  Serial.println("📋 Message queue initialized");
   
   // Warm up PIR sensor
   warmupPIRSensor();
@@ -154,9 +169,6 @@ void initializeLoRa() {
   LoRa.setSignalBandwidth(125E3);
   LoRa.setCodingRate4(5);
   
-  // Enable listening mode for status updates
-  LoRa.receive();
-  
   Serial.println("OK");
   Serial.print("   • Frequency: ");
   Serial.print(FREQUENCY / 1E6);
@@ -166,7 +178,6 @@ void initializeLoRa() {
   Serial.println(" dBm");
   Serial.print("   • Sync Word: 0x");
   Serial.println(SYNC_WORD, HEX);
-  Serial.println("   • Listening mode enabled");
 }
 
 void initializeDeviceID() {
@@ -221,50 +232,223 @@ void setup() {
 void loop() {
   if (!systemReady) return;
   
-  // Priority 1: Process receiver status updates
-  processReceiverStatus();
-  
-  // Priority 2: Check for motion detection
+  // Check for motion detection
   checkMotionSensor();
   
-  // Priority 3: Request status if no recent updates
-  requestReceiverStatus();
+  // Process queued messages
+  processMessageQueue();
   
-  // Priority 4: Check if receiver is offline
-  if (millis() - receiverState.lastStatusReceived > 30000) {
-    if (receiverState.isOnline) {
-      Serial.println("⚠️ Receiver appears to be offline - marking as unavailable");
-      receiverState.isOnline = false;
-      receiverState.isReady = false;
-    }
-  }
-  
-  // Priority 5: Update system status
+  // Update system status
   updateSystemStatus();
   
   delay(50); // Optimized loop delay
 }
 
 // ═══════════════════════════════════════════════════════════
-//                    MOTION DETECTION SYSTEM
+//                    QUEUE MANAGEMENT FUNCTIONS
+// ═══════════════════════════════════════════════════════════
+
+void initializeQueue() {
+  // Initialize all queue entries as invalid
+  for (int i = 0; i < MAX_QUEUE_SIZE; i++) {
+    messageQueue[i].isValid = false;
+    messageQueue[i].retryCount = 0;
+  }
+  queueHead = 0;
+  queueTail = 0;
+  queueSize = 0;
+}
+
+bool enqueueMessage(String type, String deviceId, int count, unsigned long timestamp, String datetime, unsigned long uptime) {
+  if (queueSize >= MAX_QUEUE_SIZE) {
+    Serial.println("⚠️  Queue full! Dropping oldest message...");
+    dequeueMessage(); // Remove oldest message
+  }
+  
+  messageQueue[queueTail].type = type;
+  messageQueue[queueTail].deviceId = deviceId;
+  messageQueue[queueTail].count = count;
+  messageQueue[queueTail].timestamp = timestamp;
+  messageQueue[queueTail].datetime = datetime;
+  messageQueue[queueTail].uptime = uptime;
+  messageQueue[queueTail].retryCount = 0;
+  messageQueue[queueTail].isValid = true;
+  
+  queueTail = (queueTail + 1) % MAX_QUEUE_SIZE;
+  queueSize++;
+  queuedMessages++;
+  
+  Serial.print("📥 Message queued (Queue size: ");
+  Serial.print(queueSize);
+  Serial.println(")");
+  
+  return true;
+}
+
+bool dequeueMessage() {
+  if (queueSize == 0) return false;
+  
+  messageQueue[queueHead].isValid = false;
+  queueHead = (queueHead + 1) % MAX_QUEUE_SIZE;
+  queueSize--;
+  
+  return true;
+}
+
+void processMessageQueue() {
+  if (queueSize == 0) return;
+  
+  // Check if it's time to retry
+  if (millis() - lastRetryTime < RETRY_INTERVAL) return;
+  
+  // Try to send the oldest message in queue
+  if (messageQueue[queueHead].isValid) {
+    bool success = transmitQueuedMessage(queueHead);
+    
+    if (success) {
+      Serial.println("✅ Queued message sent successfully");
+      dequeueMessage();
+    } else {
+      messageQueue[queueHead].retryCount++;
+      retriedMessages++;
+      
+      if (messageQueue[queueHead].retryCount >= MAX_RETRY_ATTEMPTS) {
+        Serial.print("❌ Message failed after ");
+        Serial.print(MAX_RETRY_ATTEMPTS);
+        Serial.println(" attempts. Dropping...");
+        dequeueMessage();
+        transmissionErrors++;
+      } else {
+        Serial.print("🔄 Retry ");
+        Serial.print(messageQueue[queueHead].retryCount);
+        Serial.print("/");
+        Serial.print(MAX_RETRY_ATTEMPTS);
+        Serial.println(" failed. Will retry...");
+      }
+    }
+    
+    lastRetryTime = millis();
+  }
+}
+
+bool transmitQueuedMessage(int index) {
+  QueuedMessage& msg = messageQueue[index];
+  
+  Serial.println("📤 Transmitting queued message...");
+  
+  LoRa.beginPacket();
+  LoRa.print("{");
+  LoRa.print("\"type\":\"");
+  LoRa.print(msg.type);
+  LoRa.print("\",");
+  LoRa.print("\"id\":\"");
+  LoRa.print(msg.deviceId);
+  LoRa.print("\",");
+  LoRa.print("\"count\":");
+  LoRa.print(msg.count);
+  LoRa.print(",");
+  LoRa.print("\"time\":");
+  LoRa.print(msg.timestamp);
+  LoRa.print(",");
+  LoRa.print("\"datetime\":\"");
+  LoRa.print(msg.datetime);
+  LoRa.print("\",");
+  LoRa.print("\"uptime\":");
+  LoRa.print(msg.uptime);
+  LoRa.print(",");
+  LoRa.print("\"queued\":true,");
+  LoRa.print("\"retry\":");
+  LoRa.print(msg.retryCount);
+  LoRa.print("}");
+  
+  bool success = LoRa.endPacket();
+  
+  if (success) {
+    packetsSent++;
+  }
+  
+  return success;
+}
+
+// ═══════════════════════════════════════════════════════════
+//                    ENHANCED MOTION DETECTION
 // ═══════════════════════════════════════════════════════════
 
 void checkMotionSensor() {
-  int currentMotionState = digitalRead(PIR_PIN);
-  
-  // Detect motion (LOW to HIGH transition)
-  if (currentMotionState == HIGH && lastMotionState == LOW) {
-    if (!motionCooldown) {
-      handleMotionDetection();
-    }
-  }
-  
   // Check cooldown period
-  if (motionCooldown && (millis() - lastMotionTime) > MOTION_DELAY) {
-    endMotionCooldown();
+  if (motionCooldown && (millis() - lastMotionTime > MOTION_DELAY)) {
+    motionCooldown = false;
+    digitalWrite(LED_PIN, LOW);
+    digitalWrite(STATUS_LED, LOW);
   }
   
-  lastMotionState = currentMotionState;
+  // Read motion sensor
+  int motionState = digitalRead(PIR_PIN);
+  
+  // Detect motion on rising edge (LOW to HIGH)
+  if (motionState == HIGH && lastMotionState == LOW && !motionCooldown) {
+    handleMotionDetection();
+  }
+  
+  lastMotionState = motionState;
+}
+
+bool sendMotionAlert() {
+  Serial.println("📤 Transmitting motion alert...");
+  
+  String currentDateTime = getCurrentDateTime();
+  unsigned long uptime = (millis() - systemStartTime) / 1000;
+  
+  LoRa.beginPacket();
+  LoRa.print("{");
+  LoRa.print("\"type\":\"MOTION\",");
+  LoRa.print("\"id\":\"");
+  LoRa.print(deviceID);
+  LoRa.print("\",");
+  LoRa.print("\"count\":");
+  LoRa.print(motionCounter);
+  LoRa.print(",");
+  LoRa.print("\"time\":");
+  LoRa.print(millis());
+  LoRa.print(",");
+  LoRa.print("\"datetime\":\"");
+  LoRa.print(currentDateTime);
+  LoRa.print("\",");
+  LoRa.print("\"uptime\":");
+  LoRa.print(uptime);
+  LoRa.print(",");
+  LoRa.print("\"queued\":false");
+  LoRa.print("}");
+  
+  bool success = LoRa.endPacket();
+  
+  if (success) {
+    packetsSent++;
+  } else {
+    transmissionErrors++;
+  }
+  
+  return success;
+}
+
+String getCurrentDateTime() {
+  // Simple timestamp format since we don't have RTC
+  unsigned long totalSeconds = millis() / 1000;
+  unsigned long hours = (totalSeconds / 3600) % 24;
+  unsigned long minutes = (totalSeconds / 60) % 60;
+  unsigned long seconds = totalSeconds % 60;
+  
+  String datetime = "T+";
+  if (hours < 10) datetime += "0";
+  datetime += String(hours);
+  datetime += ":";
+  if (minutes < 10) datetime += "0";
+  datetime += String(minutes);
+  datetime += ":";
+  if (seconds < 10) datetime += "0";
+  datetime += String(seconds);
+  
+  return datetime;
 }
 
 void handleMotionDetection() {
@@ -276,101 +460,22 @@ void handleMotionDetection() {
   digitalWrite(LED_PIN, HIGH);
   digitalWrite(STATUS_LED, HIGH);
   
-  // Send motion alert
+  // Try immediate transmission first
   bool success = sendMotionAlert();
+  
+  // If transmission fails, queue the message
+  if (!success) {
+    String currentDateTime = getCurrentDateTime();
+    unsigned long uptime = (millis() - systemStartTime) / 1000;
+    
+    enqueueMessage("MOTION", deviceID, motionCounter, millis(), currentDateTime, uptime);
+    Serial.println("📋 Motion alert queued for retry");
+  }
   
   // Log the detection
   logMotionDetection(success);
 }
 
-bool sendMotionAlert() {
-  Serial.println("🚨 MOTION DETECTED - PREPARING ALERT");
-  Serial.println("────────────────────────────────────────");
-  
-  // Get current date/time
-  String currentDateTime = getCurrentDateTime();
-  
-  // Create structured message with priority flag
-  String alertMessage = "{";
-  alertMessage += "\"type\":\"MOTION\",";
-  alertMessage += "\"id\":\"" + deviceID + "\",";
-  alertMessage += "\"count\":" + String(motionCounter) + ",";
-  alertMessage += "\"time\":" + String(millis()) + ",";
-  alertMessage += "\"datetime\":\"" + currentDateTime + "\",";
-  alertMessage += "\"uptime\":" + String((millis() - systemStartTime) / 1000) + ",";
-  alertMessage += "\"priority\":\"HIGH\"";
-  alertMessage += "}";
-  
-  // Check receiver status - only send if ready
-  if (!receiverState.isOnline) {
-    Serial.println("⚠️ Receiver OFFLINE - motion alert skipped");
-    return false;
-  }
-  
-  if (receiverState.isBusy) {
-    Serial.println("⏸️ Receiver BUSY - motion alert skipped");
-    return false;
-  }
-  
-  if (receiverState.alarmActive) {
-    Serial.println("🚨 Receiver ALARM ACTIVE - motion alert skipped");
-    return false;
-  }
-  
-  if (!receiverState.isReady) {
-    Serial.println("⏳ Receiver NOT READY - motion alert skipped");
-    return false;
-  }
-  
-  // Receiver is ready, send immediately
-  Serial.println("📡 Receiver READY - transmitting immediately");
-  
-  LoRa.beginPacket();
-  LoRa.print(alertMessage);
-  bool success = LoRa.endPacket();
-  
-  if (success) {
-    packetsSent++;
-    Serial.println("✅ Alert transmitted successfully");
-  } else {
-    transmissionErrors++;
-    Serial.println("❌ Transmission failed");
-  }
-  
-  // Resume listening
-  LoRa.receive();
-  
-  return success;
-}
-
-String getCurrentDateTime() {
-  // Calculate elapsed time since system start
-  unsigned long totalSeconds = (millis() - systemStartTime) / 1000;
-  
-  // Convert to days, hours, minutes, seconds
-  int days = totalSeconds / 86400;
-  totalSeconds %= 86400;
-  int hours = totalSeconds / 3600;
-  totalSeconds %= 3600;
-  int minutes = totalSeconds / 60;
-  int seconds = totalSeconds % 60;
-  
-  // Format as readable date/time string
-  String dateTime = "Day" + String(days + 1) + " ";
-  
-  if (hours < 10) dateTime += "0";
-  dateTime += String(hours) + ":";
-  
-  if (minutes < 10) dateTime += "0";
-  dateTime += String(minutes) + ":";
-  
-  if (seconds < 10) dateTime += "0";
-  dateTime += String(seconds);
-  
-  return dateTime;
-}
-
-// Updated logMotionDetection function
 void logMotionDetection(bool success) {
   unsigned long uptime = (millis() - systemStartTime) / 1000;
   
@@ -382,40 +487,19 @@ void logMotionDetection(bool success) {
   Serial.print("🕐 Timestamp: ");
   Serial.print(uptime);
   Serial.print("s | Status: ");
-  
-  if (success) {
-    Serial.println("✅ SENT");
-  } else {
-    Serial.print("❌ ");
-    if (!receiverState.isOnline) {
-      Serial.println("SKIPPED (Receiver Offline)");
-    } else if (receiverState.isBusy) {
-      Serial.println("SKIPPED (Receiver Busy)");
-    } else if (receiverState.alarmActive) {
-      Serial.println("SKIPPED (Alarm Active)");
-    } else if (!receiverState.isReady) {
-      Serial.println("SKIPPED (Not Ready)");
-    } else {
-      Serial.println("FAILED (Transmission Error)");
-    }
-  }
+  Serial.println(success ? "✅ SENT" : "📋 QUEUED");
   
   Serial.print("📈 Stats: ");
   Serial.print(packetsSent);
   Serial.print(" sent, ");
   Serial.print(transmissionErrors);
-  Serial.println(" errors");
+  Serial.print(" errors, ");
+  Serial.print(queueSize);
+  Serial.print(" queued, ");
+  Serial.print(retriedMessages);
+  Serial.println(" retries");
   
   Serial.println("────────────────────────────────────────\n");
-}
-
-void endMotionCooldown() {
-  motionCooldown = false;
-  digitalWrite(LED_PIN, LOW);
-  digitalWrite(STATUS_LED, LOW);
-  
-  Serial.println("🔄 Motion sensor ready for next detection");
-  Serial.println();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -442,71 +526,4 @@ void blinkError() {
   digitalWrite(LED_PIN, LOW);
   digitalWrite(STATUS_LED, LOW);
   delay(200);
-}
-
-// Enhanced processReceiverStatus function
-void processReceiverStatus() {
-  if (LoRa.parsePacket() == 0) return;
-  
-  String message = "";
-  while (LoRa.available()) {
-    message += (char)LoRa.read();
-  }
-  
-  // Resume listening
-  LoRa.receive();
-  
-  // Parse status message (simple JSON parsing)
-  if (message.indexOf("\"type\":\"STATUS\"") > -1) {
-    receiverState.lastStatusReceived = millis();
-    receiverState.isOnline = true;
-    
-    // Extract receiver ID
-    int idStart = message.indexOf("\"id\":\"") + 6;
-    int idEnd = message.indexOf("\"", idStart);
-    if (idStart > 5 && idEnd > idStart) {
-      receiverState.receiverID = message.substring(idStart, idEnd);
-    }
-    
-    // Parse receiver state
-    receiverState.isBusy = message.indexOf("\"busy\":true") > -1;
-    receiverState.alarmActive = message.indexOf("\"alarm\":true") > -1;
-    receiverState.isReady = message.indexOf("\"ready\":true") > -1;
-    
-    Serial.println("📡 Receiver status update received:");
-    Serial.printf("   • ID: %s\n", receiverState.receiverID.c_str());
-    Serial.printf("   • Online: %s\n", receiverState.isOnline ? "YES" : "NO");
-    Serial.printf("   • Busy: %s\n", receiverState.isBusy ? "YES" : "NO");
-    Serial.printf("   • Alarm: %s\n", receiverState.alarmActive ? "YES" : "NO");
-    Serial.printf("   • Ready: %s\n", receiverState.isReady ? "YES" : "NO");
-  }
-  
-  // Handle status request responses
-  else if (message.indexOf("\"type\":\"STATUS_REQUEST\"") > -1) {
-    Serial.println("📞 Status request acknowledged by receiver");
-  }
-}
-
-// Add status request function
-void requestReceiverStatus() {
-  if (millis() - lastStatusRequest < statusRequestInterval) {
-    return;
-  }
-  
-  // Only request if we haven't heard from receiver recently
-  if (millis() - receiverState.lastStatusReceived > 15000) {
-    String requestMessage = "{\"type\":\"STATUS_REQUEST\",\"id\":\"" + deviceID + "\"}";
-    
-    LoRa.beginPacket();
-    LoRa.print(requestMessage);
-    bool success = LoRa.endPacket();
-    
-    if (success) {
-      Serial.println("📞 Status request sent to receiver");
-    }
-    
-    LoRa.receive();
-  }
-  
-  lastStatusRequest = millis();
 }

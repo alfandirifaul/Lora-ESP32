@@ -20,7 +20,7 @@
 // Sensor & Indicator Configuration
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
 #define LED_PIN 13        // Status LED GPIO
-#define STATUS_LED 2      // Built-in LED (ESP32)
+#define STATUS_LED 12      // Built-in LED (ESP32)
 
 // ═══════════════════════════════════════════════════════════
 //                    SYSTEM PARAMETERS
@@ -51,6 +51,37 @@ int motionCounter = 0;
 int packetsSent = 0;
 int transmissionErrors = 0;
 String deviceID = "";
+
+// Add these variables for better status tracking
+unsigned long lastStatusRequest = 0;
+unsigned long statusRequestInterval = 10000; // Request status every 10 seconds if no updates
+
+// ═══════════════════════════════════════════════════════════
+//                    RECEIVER STATE & QUEUE MANAGEMENT
+// ═══════════════════════════════════════════════════════════
+
+// Receiver state tracking
+struct ReceiverState {
+  bool isOnline = false;
+  bool isReady = false;
+  bool isBusy = false;
+  bool alarmActive = false;
+  unsigned long lastStatusReceived = 0;
+  String receiverID = "";
+} receiverState;
+
+// Message queue structure
+struct MessageQueue {
+  String messages[10];  // Store up to 10 messages
+  int count = 0;
+  int front = 0;
+  int rear = 0;
+} messageQueue;
+
+// Queue management variables
+unsigned long lastQueueCheck = 0;
+unsigned long queueCheckInterval = 1000;  // Check queue every 1 second
+bool waitingForReceiver = false;
 
 // ═══════════════════════════════════════════════════════════
 //                    INITIALIZATION FUNCTIONS
@@ -136,6 +167,9 @@ void initializeLoRa() {
   LoRa.setSignalBandwidth(125E3);
   LoRa.setCodingRate4(5);
   
+  // Enable listening mode for status updates
+  LoRa.receive();
+  
   Serial.println("OK");
   Serial.print("   • Frequency: ");
   Serial.print(FREQUENCY / 1E6);
@@ -145,6 +179,7 @@ void initializeLoRa() {
   Serial.println(" dBm");
   Serial.print("   • Sync Word: 0x");
   Serial.println(SYNC_WORD, HEX);
+  Serial.println("   • Listening mode enabled");
 }
 
 void initializeDeviceID() {
@@ -199,10 +234,33 @@ void setup() {
 void loop() {
   if (!systemReady) return;
   
-  // Check for motion detection
+  // Priority 1: Process receiver status updates
+  processReceiverStatus();
+  
+  // Priority 2: Check for motion detection
   checkMotionSensor();
   
-  // Update system status
+  // Priority 3: Process message queue when receiver is ready
+  if (millis() - lastQueueCheck > queueCheckInterval) {
+    if (messageQueue.count > 0 && receiverState.isReady && !receiverState.isBusy && !receiverState.alarmActive) {
+      processMessageQueue();
+    }
+    lastQueueCheck = millis();
+  }
+  
+  // Priority 4: Request status if no recent updates
+  requestReceiverStatus();
+  
+  // Priority 5: Check if receiver is offline
+  if (millis() - receiverState.lastStatusReceived > 30000) {
+    if (receiverState.isOnline) {
+      Serial.println("⚠️ Receiver appears to be offline - marking as unavailable");
+      receiverState.isOnline = false;
+      receiverState.isReady = false;
+    }
+  }
+  
+  // Priority 6: Update system status
   updateSystemStatus();
   
   delay(50); // Optimized loop delay
@@ -247,40 +305,71 @@ void handleMotionDetection() {
 }
 
 bool sendMotionAlert() {
-  Serial.println("🚨 MOTION DETECTED - TRANSMITTING ALERT");
+  Serial.println("🚨 MOTION DETECTED - PREPARING ALERT");
   Serial.println("────────────────────────────────────────");
-  
-  LoRa.beginPacket();
   
   // Get current date/time
   String currentDateTime = getCurrentDateTime();
   
-  // Create structured message
-  LoRa.print("{");
-  LoRa.print("\"type\":\"MOTION\",");
-  LoRa.print("\"id\":\"");
-  LoRa.print(deviceID);
-  LoRa.print("\",");
-  LoRa.print("\"count\":");
-  LoRa.print(motionCounter);
-  LoRa.print(",");
-  LoRa.print("\"time\":");
-  LoRa.print(millis());
-  LoRa.print(",");
-  LoRa.print("\"datetime\":\"");
-  LoRa.print(currentDateTime);
-  LoRa.print("\",");
-  LoRa.print("\"uptime\":");
-  LoRa.print((millis() - systemStartTime) / 1000);
-  LoRa.print("}");
+  // Create structured message with priority flag
+  String alertMessage = "{";
+  alertMessage += "\"type\":\"MOTION\",";
+  alertMessage += "\"id\":\"" + deviceID + "\",";
+  alertMessage += "\"count\":" + String(motionCounter) + ",";
+  alertMessage += "\"time\":" + String(millis()) + ",";
+  alertMessage += "\"datetime\":\"" + currentDateTime + "\",";
+  alertMessage += "\"uptime\":" + String((millis() - systemStartTime) / 1000) + ",";
+  alertMessage += "\"priority\":\"HIGH\"";
+  alertMessage += "}";
   
+  // Check receiver status - be more specific about why we're queuing
+  if (!receiverState.isOnline) {
+    Serial.println("⚠️ Receiver OFFLINE - adding to queue");
+    addToQueue(alertMessage);
+    waitingForReceiver = true;
+    return false;
+  }
+  
+  if (receiverState.isBusy) {
+    Serial.println("⏸️ Receiver BUSY processing - adding to queue");
+    addToQueue(alertMessage);
+    waitingForReceiver = true;
+    return false;
+  }
+  
+  if (receiverState.alarmActive) {
+    Serial.println("🚨 Receiver ALARM ACTIVE - adding to queue");
+    addToQueue(alertMessage);
+    waitingForReceiver = true;
+    return false;
+  }
+  
+  if (!receiverState.isReady) {
+    Serial.println("⏳ Receiver NOT READY - adding to queue");
+    addToQueue(alertMessage);
+    waitingForReceiver = true;
+    return false;
+  }
+  
+  // Receiver is ready, send immediately
+  Serial.println("📡 Receiver READY - transmitting immediately");
+  
+  LoRa.beginPacket();
+  LoRa.print(alertMessage);
   bool success = LoRa.endPacket();
   
   if (success) {
     packetsSent++;
+    Serial.println("✅ Alert transmitted successfully");
   } else {
     transmissionErrors++;
+    Serial.println("❌ Transmission failed - adding to queue for retry");
+    addToQueue(alertMessage);
+    waitingForReceiver = true;
   }
+  
+  // Resume listening
+  LoRa.receive();
   
   return success;
 }
@@ -367,4 +456,140 @@ void blinkError() {
   digitalWrite(LED_PIN, LOW);
   digitalWrite(STATUS_LED, LOW);
   delay(200);
+}
+
+// Enhanced processReceiverStatus function
+void processReceiverStatus() {
+  if (LoRa.parsePacket() == 0) return;
+  
+  String message = "";
+  while (LoRa.available()) {
+    message += (char)LoRa.read();
+  }
+  
+  // Resume listening
+  LoRa.receive();
+  
+  // Parse status message (simple JSON parsing)
+  if (message.indexOf("\"type\":\"STATUS\"") > -1) {
+    receiverState.lastStatusReceived = millis();
+    receiverState.isOnline = true;
+    
+    // Extract receiver ID
+    int idStart = message.indexOf("\"id\":\"") + 6;
+    int idEnd = message.indexOf("\"", idStart);
+    if (idStart > 5 && idEnd > idStart) {
+      receiverState.receiverID = message.substring(idStart, idEnd);
+    }
+    
+    // Parse receiver state
+    receiverState.isBusy = message.indexOf("\"busy\":true") > -1;
+    receiverState.alarmActive = message.indexOf("\"alarm\":true") > -1;
+    receiverState.isReady = message.indexOf("\"ready\":true") > -1;
+    
+    Serial.println("📡 Receiver status update received:");
+    Serial.printf("   • ID: %s\n", receiverState.receiverID.c_str());
+    Serial.printf("   • Online: %s\n", receiverState.isOnline ? "YES" : "NO");
+    Serial.printf("   • Busy: %s\n", receiverState.isBusy ? "YES" : "NO");
+    Serial.printf("   • Alarm: %s\n", receiverState.alarmActive ? "YES" : "NO");
+    Serial.printf("   • Ready: %s\n", receiverState.isReady ? "YES" : "NO");
+    
+    // If receiver is ready and we have queued messages, process them immediately
+    if (receiverState.isReady && messageQueue.count > 0) {
+      Serial.println("🚀 Receiver is ready - processing queue immediately");
+      processMessageQueue();
+    }
+  }
+  
+  // Handle status request responses
+  else if (message.indexOf("\"type\":\"STATUS_REQUEST\"") > -1) {
+    Serial.println("📞 Status request acknowledged by receiver");
+  }
+}
+
+// Add status request function
+void requestReceiverStatus() {
+  if (millis() - lastStatusRequest < statusRequestInterval) {
+    return;
+  }
+  
+  // Only request if we haven't heard from receiver recently
+  if (millis() - receiverState.lastStatusReceived > 15000) {
+    String requestMessage = "{\"type\":\"STATUS_REQUEST\",\"id\":\"" + deviceID + "\"}";
+    
+    LoRa.beginPacket();
+    LoRa.print(requestMessage);
+    bool success = LoRa.endPacket();
+    
+    if (success) {
+      Serial.println("📞 Status request sent to receiver");
+    }
+    
+    LoRa.receive();
+  }
+  
+  lastStatusRequest = millis();
+}
+
+// ═══════════════════════════════════════════════════════════
+//                    MESSAGE QUEUE FUNCTIONS
+// ═══════════════════════════════════════════════════════════
+
+void addToQueue(String message) {
+  if (messageQueue.count >= 10) {
+    Serial.println("⚠️ Queue full - dropping oldest message");
+    // Remove oldest message
+    messageQueue.front = (messageQueue.front + 1) % 10;
+    messageQueue.count--;
+  }
+  
+  messageQueue.messages[messageQueue.rear] = message;
+  messageQueue.rear = (messageQueue.rear + 1) % 10;
+  messageQueue.count++;
+  
+  Serial.printf("📥 Message queued (Queue: %d/10)\n", messageQueue.count);
+}
+
+void processMessageQueue() {
+  if (messageQueue.count == 0) return;
+  
+  Serial.printf("🚀 Processing queue - %d messages pending\n", messageQueue.count);
+  
+  while (messageQueue.count > 0 && receiverState.isReady && !receiverState.isBusy && !receiverState.alarmActive) {
+    String message = messageQueue.messages[messageQueue.front];
+    messageQueue.front = (messageQueue.front + 1) % 10;
+    messageQueue.count--;
+    
+    Serial.println("📤 Sending queued message...");
+    
+    LoRa.beginPacket();
+    LoRa.print(message);
+    bool success = LoRa.endPacket();
+    
+    if (success) {
+      packetsSent++;
+      Serial.printf("✅ Queued message sent successfully (Queue: %d/10)\n", messageQueue.count);
+    } else {
+      // Put message back in queue if failed
+      transmissionErrors++;
+      Serial.println("❌ Failed to send queued message - adding back to queue");
+      
+      // Add back to front of queue
+      messageQueue.front = (messageQueue.front - 1 + 10) % 10;
+      messageQueue.messages[messageQueue.front] = message;
+      messageQueue.count++;
+      break; // Stop processing if transmission fails
+    }
+    
+    // Resume listening after each transmission
+    LoRa.receive();
+    
+    // Small delay between queue transmissions
+    delay(100);
+  }
+  
+  if (messageQueue.count == 0) {
+    waitingForReceiver = false;
+    Serial.println("✅ All queued messages processed successfully");
+  }
 }

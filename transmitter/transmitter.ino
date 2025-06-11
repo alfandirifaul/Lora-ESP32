@@ -57,7 +57,7 @@ unsigned long lastStatusRequest = 0;
 unsigned long statusRequestInterval = 10000; // Request status every 10 seconds if no updates
 
 // ═══════════════════════════════════════════════════════════
-//                    RECEIVER STATE & QUEUE MANAGEMENT
+//                    RECEIVER STATE TRACKING
 // ═══════════════════════════════════════════════════════════
 
 // Receiver state tracking
@@ -69,19 +69,6 @@ struct ReceiverState {
   unsigned long lastStatusReceived = 0;
   String receiverID = "";
 } receiverState;
-
-// Message queue structure
-struct MessageQueue {
-  String messages[10];  // Store up to 10 messages
-  int count = 0;
-  int front = 0;
-  int rear = 0;
-} messageQueue;
-
-// Queue management variables
-unsigned long lastQueueCheck = 0;
-unsigned long queueCheckInterval = 1000;  // Check queue every 1 second
-bool waitingForReceiver = false;
 
 // ═══════════════════════════════════════════════════════════
 //                    INITIALIZATION FUNCTIONS
@@ -240,18 +227,10 @@ void loop() {
   // Priority 2: Check for motion detection
   checkMotionSensor();
   
-  // Priority 3: Process message queue when receiver is ready
-  if (millis() - lastQueueCheck > queueCheckInterval) {
-    if (messageQueue.count > 0 && receiverState.isReady && !receiverState.isBusy && !receiverState.alarmActive) {
-      processMessageQueue();
-    }
-    lastQueueCheck = millis();
-  }
-  
-  // Priority 4: Request status if no recent updates
+  // Priority 3: Request status if no recent updates
   requestReceiverStatus();
   
-  // Priority 5: Check if receiver is offline
+  // Priority 4: Check if receiver is offline
   if (millis() - receiverState.lastStatusReceived > 30000) {
     if (receiverState.isOnline) {
       Serial.println("⚠️ Receiver appears to be offline - marking as unavailable");
@@ -260,7 +239,7 @@ void loop() {
     }
   }
   
-  // Priority 6: Update system status
+  // Priority 5: Update system status
   updateSystemStatus();
   
   delay(50); // Optimized loop delay
@@ -322,32 +301,24 @@ bool sendMotionAlert() {
   alertMessage += "\"priority\":\"HIGH\"";
   alertMessage += "}";
   
-  // Check receiver status - be more specific about why we're queuing
+  // Check receiver status - only send if ready
   if (!receiverState.isOnline) {
-    Serial.println("⚠️ Receiver OFFLINE - adding to queue");
-    addToQueue(alertMessage);
-    waitingForReceiver = true;
+    Serial.println("⚠️ Receiver OFFLINE - motion alert skipped");
     return false;
   }
   
   if (receiverState.isBusy) {
-    Serial.println("⏸️ Receiver BUSY processing - adding to queue");
-    addToQueue(alertMessage);
-    waitingForReceiver = true;
+    Serial.println("⏸️ Receiver BUSY - motion alert skipped");
     return false;
   }
   
   if (receiverState.alarmActive) {
-    Serial.println("🚨 Receiver ALARM ACTIVE - adding to queue");
-    addToQueue(alertMessage);
-    waitingForReceiver = true;
+    Serial.println("🚨 Receiver ALARM ACTIVE - motion alert skipped");
     return false;
   }
   
   if (!receiverState.isReady) {
-    Serial.println("⏳ Receiver NOT READY - adding to queue");
-    addToQueue(alertMessage);
-    waitingForReceiver = true;
+    Serial.println("⏳ Receiver NOT READY - motion alert skipped");
     return false;
   }
   
@@ -363,9 +334,7 @@ bool sendMotionAlert() {
     Serial.println("✅ Alert transmitted successfully");
   } else {
     transmissionErrors++;
-    Serial.println("❌ Transmission failed - adding to queue for retry");
-    addToQueue(alertMessage);
-    waitingForReceiver = true;
+    Serial.println("❌ Transmission failed");
   }
   
   // Resume listening
@@ -401,6 +370,7 @@ String getCurrentDateTime() {
   return dateTime;
 }
 
+// Updated logMotionDetection function
 void logMotionDetection(bool success) {
   unsigned long uptime = (millis() - systemStartTime) / 1000;
   
@@ -412,7 +382,23 @@ void logMotionDetection(bool success) {
   Serial.print("🕐 Timestamp: ");
   Serial.print(uptime);
   Serial.print("s | Status: ");
-  Serial.println(success ? "✅ SENT" : "❌ FAILED");
+  
+  if (success) {
+    Serial.println("✅ SENT");
+  } else {
+    Serial.print("❌ ");
+    if (!receiverState.isOnline) {
+      Serial.println("SKIPPED (Receiver Offline)");
+    } else if (receiverState.isBusy) {
+      Serial.println("SKIPPED (Receiver Busy)");
+    } else if (receiverState.alarmActive) {
+      Serial.println("SKIPPED (Alarm Active)");
+    } else if (!receiverState.isReady) {
+      Serial.println("SKIPPED (Not Ready)");
+    } else {
+      Serial.println("FAILED (Transmission Error)");
+    }
+  }
   
   Serial.print("📈 Stats: ");
   Serial.print(packetsSent);
@@ -493,12 +479,6 @@ void processReceiverStatus() {
     Serial.printf("   • Busy: %s\n", receiverState.isBusy ? "YES" : "NO");
     Serial.printf("   • Alarm: %s\n", receiverState.alarmActive ? "YES" : "NO");
     Serial.printf("   • Ready: %s\n", receiverState.isReady ? "YES" : "NO");
-    
-    // If receiver is ready and we have queued messages, process them immediately
-    if (receiverState.isReady && messageQueue.count > 0) {
-      Serial.println("🚀 Receiver is ready - processing queue immediately");
-      processMessageQueue();
-    }
   }
   
   // Handle status request responses
@@ -529,67 +509,4 @@ void requestReceiverStatus() {
   }
   
   lastStatusRequest = millis();
-}
-
-// ═══════════════════════════════════════════════════════════
-//                    MESSAGE QUEUE FUNCTIONS
-// ═══════════════════════════════════════════════════════════
-
-void addToQueue(String message) {
-  if (messageQueue.count >= 10) {
-    Serial.println("⚠️ Queue full - dropping oldest message");
-    // Remove oldest message
-    messageQueue.front = (messageQueue.front + 1) % 10;
-    messageQueue.count--;
-  }
-  
-  messageQueue.messages[messageQueue.rear] = message;
-  messageQueue.rear = (messageQueue.rear + 1) % 10;
-  messageQueue.count++;
-  
-  Serial.printf("📥 Message queued (Queue: %d/10)\n", messageQueue.count);
-}
-
-void processMessageQueue() {
-  if (messageQueue.count == 0) return;
-  
-  Serial.printf("🚀 Processing queue - %d messages pending\n", messageQueue.count);
-  
-  while (messageQueue.count > 0 && receiverState.isReady && !receiverState.isBusy && !receiverState.alarmActive) {
-    String message = messageQueue.messages[messageQueue.front];
-    messageQueue.front = (messageQueue.front + 1) % 10;
-    messageQueue.count--;
-    
-    Serial.println("📤 Sending queued message...");
-    
-    LoRa.beginPacket();
-    LoRa.print(message);
-    bool success = LoRa.endPacket();
-    
-    if (success) {
-      packetsSent++;
-      Serial.printf("✅ Queued message sent successfully (Queue: %d/10)\n", messageQueue.count);
-    } else {
-      // Put message back in queue if failed
-      transmissionErrors++;
-      Serial.println("❌ Failed to send queued message - adding back to queue");
-      
-      // Add back to front of queue
-      messageQueue.front = (messageQueue.front - 1 + 10) % 10;
-      messageQueue.messages[messageQueue.front] = message;
-      messageQueue.count++;
-      break; // Stop processing if transmission fails
-    }
-    
-    // Resume listening after each transmission
-    LoRa.receive();
-    
-    // Small delay between queue transmissions
-    delay(100);
-  }
-  
-  if (messageQueue.count == 0) {
-    waitingForReceiver = false;
-    Serial.println("✅ All queued messages processed successfully");
-  }
 }

@@ -495,12 +495,12 @@ void processReceivedPacket() {
     
     state.isBusy = true;
     state.isReady = false;
+
+    logger.log(LOG_INFO, "TELEGRAM", "Sending motion alert", "Alert #" + String(state.motionCount));
+    sendTelegramAlert();
     
     logger.logAlarmSequence("ACTIVATED", "Motion detection triggered");
     startEmergencyAlarm();
-    
-    logger.log(LOG_INFO, "TELEGRAM", "Sending motion alert", "Alert #" + String(state.motionCount));
-    sendTelegramAlert();
     
     state.displayNeedsUpdate = true;
     

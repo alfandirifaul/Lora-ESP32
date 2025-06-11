@@ -225,22 +225,20 @@ void startEmergencyAlarm() {
   digitalWrite(BUZZER_PIN, HIGH);
   
   Serial.println("🚨 EMERGENCY ALARM ACTIVATED!");
+  updateEmergencyAlarm();
 }
 
 void updateEmergencyAlarm() {
   if (!state.alarmActive) return;
   
   bool stateBuzzer = false;
-  int count;
-  for(count = 0; count <= 10;  count++) {
+  for(int count = 0; count <= 25; count++) {
     stateBuzzer = !stateBuzzer;
     digitalWrite(BUZZER_PIN, stateBuzzer);
     delay(150);
   }
 
-  if(count == 25) {
-    stopEmergencyAlarm();
-  }
+  stopEmergencyAlarm();
 }
 
 void stopEmergencyAlarm() {
@@ -625,13 +623,10 @@ void loop() {
   // Priority 1: Process LoRa packets immediately
   processReceivedPacket();
   
-  // Priority 2: Update emergency alarm timing
-  updateEmergencyAlarm();
-  
-  // Priority 3: Handle Telegram communications
+  // Priority 2: Handle Telegram communications
   handleTelegramMessages();
   
-  // Priority 4: Update display and animations
+  // Priority 3: Update display and animations
   updateAnimation();
   updateDisplay();
   

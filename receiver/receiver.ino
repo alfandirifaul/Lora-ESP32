@@ -63,8 +63,14 @@ struct SystemState {
   bool isBusy = false;
   bool isReady = true;
   unsigned long lastStatusSent = 0;
-  unsigned long statusInterval = 5000; // Send status every 5 seconds
+  unsigned long statusInterval = 30000; // Send heartbeat every 30 seconds only
   String receiverID = "";
+  
+  // Previous state tracking for change detection
+  bool prevBusy = false;
+  bool prevAlarmActive = false;
+  bool prevReady = true;
+  bool statusChanged = false;
 } state;
 
 // ═══════════════════════════════════════════════════════════
@@ -195,48 +201,87 @@ void initializeReceiverID() {
 void processReceivedPacket() {
   if (!state.packetReceived) return;
   
-  // Set system as busy while processing
-  state.isBusy = true;
-  state.isReady = false;
-  
-  // Process the motion detection data
-  state.motionCount++;
-  state.lastMotionTime = millis();
-  state.lastRSSI = String(LoRa.packetRssi());
-  
-  // Read packet content
-  state.lastMessage = "";
+  // Check if we need to handle status requests
+  String message = "";
   while (LoRa.available()) {
-    state.lastMessage += (char)LoRa.read();
+    message += (char)LoRa.read();
   }
   
-  // Start emergency alarm
-  startEmergencyAlarm();
+  // Handle status requests from transmitter
+  if (message.indexOf("\"type\":\"STATUS_REQUEST\"") > -1) {
+    Serial.println("📞 Status request received from transmitter");
+    state.statusChanged = true; // Force status send
+    sendReceiverStatus();
+    state.packetReceived = false;
+    return;
+  }
   
-  // Send Telegram alert
-  sendTelegramAlert();
-  
-  // Update display
-  state.displayNeedsUpdate = true;
-  
-  Serial.println("🚨 MOTION DETECTED | Alert #" + String(state.motionCount));
-  Serial.printf("📨 Message: %s\n", state.lastMessage.c_str());
-  Serial.printf("📶 RSSI: %s dBm\n", state.lastRSSI.c_str());
-  Serial.printf("⏱️ Processing time: %lums\n", millis() - state.lastMotionTime);
-  Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  // Handle motion detection packets
+  if (message.indexOf("\"type\":\"MOTION\"") > -1) {
+    // Set system as busy while processing
+    bool wasReady = state.isReady;
+    bool wasBusy = state.isBusy;
+    
+    state.isBusy = true;
+    state.isReady = false;
+    
+    // Send immediate status update if state changed
+    if (state.isBusy != wasBusy || state.isReady != wasReady) {
+      Serial.println("🔄 Processing state changed - sending status update");
+      sendReceiverStatus();
+    }
+    
+    // Process the motion detection data
+    state.motionCount++;
+    state.lastMotionTime = millis();
+    state.lastRSSI = String(LoRa.packetRssi());
+    state.lastMessage = message;
+    
+    // Start emergency alarm
+    startEmergencyAlarm();
+    
+    // Send Telegram alert
+    sendTelegramAlert();
+    
+    // Update display
+    state.displayNeedsUpdate = true;
+    
+    Serial.println("🚨 MOTION DETECTED | Alert #" + String(state.motionCount));
+    Serial.printf("📨 Message: %s\n", state.lastMessage.c_str());
+    Serial.printf("📶 RSSI: %s dBm\n", state.lastRSSI.c_str());
+    Serial.printf("⏱️ Processing time: %lums\n", millis() - state.lastMotionTime);
+    Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    // System becomes ready again after processing
+    bool newReady = true;
+    bool newBusy = false;
+    
+    if (state.isReady != newReady || state.isBusy != newBusy) {
+      state.isReady = newReady;
+      state.isBusy = newBusy;
+      Serial.println("✅ Processing complete - sending ready status");
+      sendReceiverStatus();
+    }
+  }
   
   state.packetReceived = false;
-  
-  // System becomes ready again after processing
-  state.isBusy = false;
-  state.isReady = true;
-  
-  // Send immediate status update
-  sendReceiverStatus();
 }
 
+// ═══════════════════════════════════════════════════════════
+//                    RECEIVER STATUS FUNCTIONS
+// ═══════════════════════════════════════════════════════════
 void sendReceiverStatus() {
-  if (millis() - state.lastStatusSent < state.statusInterval) {
+  // Check if any status has changed
+  bool hasChanged = (state.isBusy != state.prevBusy) ||
+                    (state.alarmActive != state.prevAlarmActive) ||
+                    (state.isReady != state.prevReady) ||
+                    state.statusChanged;
+  
+  // Send heartbeat every 30 seconds even if no changes
+  bool heartbeatTime = (millis() - state.lastStatusSent) > state.statusInterval;
+  
+  // Only send if there's a change or it's heartbeat time
+  if (!hasChanged && !heartbeatTime) {
     return;
   }
   
@@ -256,13 +301,28 @@ void sendReceiverStatus() {
   bool success = LoRa.endPacket();
   
   if (success) {
-    Serial.println("📡 Status sent to transmitter:");
-    Serial.printf("   • Busy: %s\n", state.isBusy ? "YES" : "NO");
-    Serial.printf("   • Alarm: %s\n", state.alarmActive ? "YES" : "NO");
-    Serial.printf("   • Ready: %s\n", state.isReady ? "YES" : "NO");
+    String changeType = hasChanged ? "CHANGE" : "HEARTBEAT";
+    Serial.printf("📡 Status %s sent to transmitter:\n", changeType.c_str());
+    Serial.printf("   • Busy: %s%s\n", 
+                  state.isBusy ? "YES" : "NO",
+                  (state.isBusy != state.prevBusy) ? " [CHANGED]" : "");
+    Serial.printf("   • Alarm: %s%s\n", 
+                  state.alarmActive ? "YES" : "NO",
+                  (state.alarmActive != state.prevAlarmActive) ? " [CHANGED]" : "");
+    Serial.printf("   • Ready: %s%s\n", 
+                  state.isReady ? "YES" : "NO",
+                  (state.isReady != state.prevReady) ? " [CHANGED]" : "");
+    
+    // Update previous state values
+    state.prevBusy = state.isBusy;
+    state.prevAlarmActive = state.alarmActive;
+    state.prevReady = state.isReady;
+    state.statusChanged = false;
+    
+    state.lastStatusSent = millis();
+  } else {
+    Serial.println("❌ Failed to send status update");
   }
-  
-  state.lastStatusSent = millis();
   
   // Resume listening
   LoRa.receive();
@@ -272,38 +332,50 @@ void sendReceiverStatus() {
 //                    EMERGENCY ALARM SYSTEM (FIXED)
 // ═══════════════════════════════════════════════════════════
 void startEmergencyAlarm() {
+  // Update alarm state
+  bool wasAlarmActive = state.alarmActive;
+  bool wasReady = state.isReady;
+  
   state.alarmActive = true;
   state.isReady = false;
   state.buzzerState = true;
   
   Serial.println("🚨 EMERGENCY ALARM ACTIVATED!");
   
-  // Send immediate status update when alarm starts
-  sendReceiverStatus();
+  // Send immediate status update when alarm state changes
+  if (state.alarmActive != wasAlarmActive || state.isReady != wasReady) {
+    Serial.println("🚨 Alarm state changed - sending status update");
+    sendReceiverStatus();
+  }
   
-  // Alarm sequence with status updates
+  // Alarm sequence - reduced status updates during alarm
   bool stateBuzzer = false;
   for (int count = 0; count < 25; count++) {
     stateBuzzer = !stateBuzzer;
     digitalWrite(BUZZER_PIN, stateBuzzer);
     delay(200);
     
-    // Send status every 2 seconds during alarm
-    if (count % 10 == 0) {
+    // Only send status update if someone requests it during alarm
+    if (state.statusChanged) {
       sendReceiverStatus();
     }
   }
   
-  // End alarm
+  // End alarm and update state
   digitalWrite(BUZZER_PIN, LOW);
-  state.alarmActive = false;
-  state.isReady = true;
+  bool newAlarmActive = false;
+  bool newReady = true;
   state.buzzerState = false;
   
-  Serial.println("✅ Emergency alarm deactivated - Ready for new data");
+  Serial.println("✅ Emergency alarm deactivated");
   
-  // Send final status update
-  sendReceiverStatus();
+  // Send status update when alarm ends
+  if (state.alarmActive != newAlarmActive || state.isReady != newReady) {
+    state.alarmActive = newAlarmActive;
+    state.isReady = newReady;
+    Serial.println("✅ Alarm deactivated - sending ready status");
+    sendReceiverStatus();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -679,7 +751,7 @@ void loop() {
   // Priority 1: Process LoRa packets immediately
   processReceivedPacket();
   
-  // Priority 2: Send status broadcasts to transmitters
+  // Priority 2: Send status only when changed or heartbeat needed
   sendReceiverStatus();
   
   // Priority 3: Handle Telegram communications
@@ -691,4 +763,10 @@ void loop() {
   
   // Minimal delay for system stability
   delay(1);
+}
+
+// Add a function to manually trigger status update if needed
+void forceStatusUpdate() {
+  state.statusChanged = true;
+  sendReceiverStatus();
 }

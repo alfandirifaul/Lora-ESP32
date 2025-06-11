@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoRa Status Monitor</title>
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body>
+    <header>
+        <h1>LoRa Status Monitor</h1>
+    </header>
+    <main>
+        <section id="status">
+            <h2>Current Status</h2>
+            <div id="status-info">
+                <p><strong>Receiver ID:</strong> <span id="receiver-id">Loading...</span></p>
+                <p><strong>Status:</strong> <span id="status-text">Loading...</span></p>
+                <p><strong>Last Received Data:</strong> <span id="last-data">Loading...</span></p>
+                <p><strong>Signal Strength:</strong> <span id="signal-strength">Loading...</span></p>
+            </div>
+        </section>
+        <section id="logs">
+            <h2>Received Data Logs</h2>
+            <table id="logs-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Data</th>
+                    </tr>
+                </thead>
+                <tbody id="logs-body">
+                    <tr>
+                        <td colspan="2">No logs available.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2023 LoRa Monitoring System</p>
+    </footer>
+    <script src="js/main.js"></script>
+    <script src="js/websocket.js"></script>
+</body>
+</html>

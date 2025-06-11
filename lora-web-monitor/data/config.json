@@ -1,0 +1,17 @@
+{
+  "wifi": {
+    "ssid": "",
+    "password": ""
+  },
+  "lora": {
+    "frequency": 433000000,
+    "syncWord": 243
+  },
+  "server": {
+    "port": 80
+  },
+  "logging": {
+    "logFile": "logs.txt",
+    "maxLogSize": 1024
+  }
+}

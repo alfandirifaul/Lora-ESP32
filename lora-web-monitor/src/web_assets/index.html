@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LoRa Monitoring Dashboard</title>
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="stylesheet" href="css/responsive.css">
+</head>
+<body>
+    <header>
+        <h1>LoRa Monitoring Dashboard</h1>
+        <nav>
+            <ul>
+                <li><a href="status.html">Status</a></li>
+                <li><a href="logs.html">Logs</a></li>
+                <li><a href="wifi_config.html">WiFi Configuration</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        <section id="status-section">
+            <h2>Current LoRa Status</h2>
+            <div id="status-display">
+                <!-- Status information will be dynamically populated here -->
+            </div>
+        </section>
+        <section id="logs-section">
+            <h2>Received Data Logs</h2>
+            <div id="logs-display">
+                <!-- Logs will be dynamically populated here -->
+            </div>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2023 LoRa Monitoring System</p>
+    </footer>
+    <script src="js/main.js"></script>
+    <script src="js/websocket.js"></script>
+    <script src="js/charts.js"></script>
+</body>
+</html>

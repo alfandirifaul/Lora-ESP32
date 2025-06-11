@@ -58,6 +58,13 @@ struct SystemState {
   
   // LoRa interrupt
   volatile bool packetReceived = false;
+  
+  // Receiver status
+  bool isBusy = false;
+  bool isReady = true;
+  unsigned long lastStatusSent = 0;
+  unsigned long statusInterval = 5000; // Send status every 5 seconds
+  String receiverID = "";
 } state;
 
 // ═══════════════════════════════════════════════════════════
@@ -97,6 +104,7 @@ void setup() {
   initializeWiFi();
   initializeTelegram();
   initializeLoRa();
+  initializeReceiverID();
   
   showReadyScreen();
   Serial.println("✅ System Ready - Real-Time Monitoring Active!");
@@ -167,15 +175,31 @@ void initializeLoRa() {
   Serial.println("✅ LoRa Module Ready!");
 }
 
+void initializeReceiverID() {
+  Serial.print("🆔 Generating receiver ID... ");
+  
+  // Get MAC address for unique ID
+  WiFi.mode(WIFI_STA);
+  String mac = WiFi.macAddress();
+  state.receiverID = "RX-" + mac.substring(12);
+  state.receiverID.replace(":", "");
+  
+  Serial.print("OK (");
+  Serial.print(state.receiverID);
+  Serial.println(")");
+}
+
 // ═══════════════════════════════════════════════════════════
 //                    PACKET PROCESSING
 // ═══════════════════════════════════════════════════════════
 void processReceivedPacket() {
   if (!state.packetReceived) return;
   
-  state.packetReceived = false;
+  // Set system as busy while processing
+  state.isBusy = true;
+  state.isReady = false;
   
-  // Update motion data
+  // Process the motion detection data
   state.motionCount++;
   state.lastMotionTime = millis();
   state.lastRSSI = String(LoRa.packetRssi());
@@ -186,31 +210,62 @@ void processReceivedPacket() {
     state.lastMessage += (char)LoRa.read();
   }
   
-  // Resume listening
-  LoRa.receive();
-  
-  // Update RSSI statistics
-  int currentRSSI = state.lastRSSI.toInt();
-  if (currentRSSI > state.maxRSSI) state.maxRSSI = currentRSSI;
-  if (currentRSSI < state.minRSSI) state.minRSSI = currentRSSI;
-  
-  // Trigger responses
+  // Start emergency alarm
   startEmergencyAlarm();
+  
+  // Send Telegram alert
   sendTelegramAlert();
   
-  // Log to serial
-  logMotionDetection();
-  
+  // Update display
   state.displayNeedsUpdate = true;
-}
-
-void logMotionDetection() {
-  Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-  Serial.printf("🚨 MOTION DETECTED | Alert #%d\n", state.motionCount);
+  
+  Serial.println("🚨 MOTION DETECTED | Alert #" + String(state.motionCount));
   Serial.printf("📨 Message: %s\n", state.lastMessage.c_str());
   Serial.printf("📶 RSSI: %s dBm\n", state.lastRSSI.c_str());
-  Serial.printf("⚡ Response Time: %lu ms\n", millis() - state.lastMotionTime);
+  Serial.printf("⏱️ Processing time: %lums\n", millis() - state.lastMotionTime);
   Serial.println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+  
+  state.packetReceived = false;
+  
+  // System becomes ready again after processing
+  state.isBusy = false;
+  state.isReady = true;
+  
+  // Send immediate status update
+  sendReceiverStatus();
+}
+
+void sendReceiverStatus() {
+  if (millis() - state.lastStatusSent < state.statusInterval) {
+    return;
+  }
+  
+  // Create status message
+  String statusMessage = "{";
+  statusMessage += "\"type\":\"STATUS\",";
+  statusMessage += "\"id\":\"" + state.receiverID + "\",";
+  statusMessage += "\"busy\":" + String(state.isBusy ? "true" : "false") + ",";
+  statusMessage += "\"alarm\":" + String(state.alarmActive ? "true" : "false") + ",";
+  statusMessage += "\"ready\":" + String(state.isReady ? "true" : "false") + ",";
+  statusMessage += "\"time\":" + String(millis());
+  statusMessage += "}";
+  
+  // Send status to transmitter
+  LoRa.beginPacket();
+  LoRa.print(statusMessage);
+  bool success = LoRa.endPacket();
+  
+  if (success) {
+    Serial.println("📡 Status sent to transmitter:");
+    Serial.printf("   • Busy: %s\n", state.isBusy ? "YES" : "NO");
+    Serial.printf("   • Alarm: %s\n", state.alarmActive ? "YES" : "NO");
+    Serial.printf("   • Ready: %s\n", state.isReady ? "YES" : "NO");
+  }
+  
+  state.lastStatusSent = millis();
+  
+  // Resume listening
+  LoRa.receive();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -218,36 +273,37 @@ void logMotionDetection() {
 // ═══════════════════════════════════════════════════════════
 void startEmergencyAlarm() {
   state.alarmActive = true;
-  state.alarmStartTime = millis();
-  state.lastBeepTime = millis();
+  state.isReady = false;
   state.buzzerState = true;
   
-  digitalWrite(BUZZER_PIN, HIGH);
-  
   Serial.println("🚨 EMERGENCY ALARM ACTIVATED!");
-  updateEmergencyAlarm();
-}
-
-void updateEmergencyAlarm() {
-  if (!state.alarmActive) return;
   
+  // Send immediate status update when alarm starts
+  sendReceiverStatus();
+  
+  // Alarm sequence with status updates
   bool stateBuzzer = false;
-  for(int count = 0; count <= 25; count++) {
+  for (int count = 0; count < 25; count++) {
     stateBuzzer = !stateBuzzer;
     digitalWrite(BUZZER_PIN, stateBuzzer);
-    delay(150);
+    delay(200);
+    
+    // Send status every 2 seconds during alarm
+    if (count % 10 == 0) {
+      sendReceiverStatus();
+    }
   }
-
-  stopEmergencyAlarm();
-}
-
-void stopEmergencyAlarm() {
-  state.alarmActive = false;
-  digitalWrite(BUZZER_PIN, LOW);
-  state.buzzerState = false;
-  state.displayNeedsUpdate = true;
   
-  Serial.println("✅ Emergency alarm deactivated");
+  // End alarm
+  digitalWrite(BUZZER_PIN, LOW);
+  state.alarmActive = false;
+  state.isReady = true;
+  state.buzzerState = false;
+  
+  Serial.println("✅ Emergency alarm deactivated - Ready for new data");
+  
+  // Send final status update
+  sendReceiverStatus();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -623,10 +679,13 @@ void loop() {
   // Priority 1: Process LoRa packets immediately
   processReceivedPacket();
   
-  // Priority 2: Handle Telegram communications
+  // Priority 2: Send status broadcasts to transmitters
+  sendReceiverStatus();
+  
+  // Priority 3: Handle Telegram communications
   handleTelegramMessages();
   
-  // Priority 3: Update display and animations
+  // Priority 4: Update display and animations
   updateAnimation();
   updateDisplay();
   

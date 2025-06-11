@@ -1,5 +1,5 @@
 /*********
-  Alfandi Nurhuda - pams
+  Alfandi Nurhuda - LoRa
   Modified from the examples of the Arduino LoRa library
   Enhanced Motion Detection Data Logger with Professional Display
 *********/
@@ -9,6 +9,10 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
+#include <WiFi.h>
+#include <UniversalTelegramBot.h>
+#include <ArduinoJson.h>
+#include <WiFiClientSecure.h>
 
 //define the pins used by the transceiver module
 #define ss 5
@@ -48,6 +52,19 @@ int minRSSI = 999;
 int animationFrame = 0;
 unsigned long lastAnimationTime = 0;
 
+// WiFi Credentials
+const char *ssid = "nesyaaa";
+const char * password = "aaaaaaab";
+
+String botToken = "7472014617:AAGYjDzTqek4QaTJfDMiiO2yldJsq65HK1w"; 
+String chatId = "7651348719";
+
+WiFiClientSecure Client;
+UniversalTelegramBot bot(botToken, Client);
+
+int botRequestDelay = 1000; 
+unsigned long lastTimeBotRan;
+
 void setup() {
   //initialize Serial Monitor
   Serial.begin(115200);
@@ -56,6 +73,14 @@ void setup() {
   Serial.println("🚀 Advanced LoRa Motion Detection System");
   Serial.println("=========================================");
 
+  initializeWifi();
+
+  Client.setCACert(TELEGRAM_CERTIFICATE_ROOT); // Set Telegram root certificate
+  Serial.println("🔗 Telegram Bot initialized");
+  Serial.println("✅ Ready for Telegram notifications!");
+  Serial.println("=========================================");
+
+  Serial.println("🔧 Initializing System Components...");
   // Record system start time
   systemStartTime = millis();
 
@@ -98,6 +123,177 @@ void setup() {
   // Show ready screen
   showReadyScreen();
   Serial.println("🎯 System Ready - Monitoring for Motion...");
+}
+
+void initializeWifi() {
+  Serial.println("🌐 Initializing WiFi...");
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("✅ WiFi Connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+  Serial.println("🌐 WiFi Initialization Complete");
+}
+
+void handleNewMessages(int numNewMessages) {
+  Serial.print("📬 New messages: ");
+  Serial.println(numNewMessages);
+  for (int i = 0; i < numNewMessages; i++) {
+    // Chat id of owner
+    String chat_id = String(bot.messages[i].chat_id);
+    if(chat_id != chatId) {
+      Serial.println("❌ Unauthorized User, ignoring message");
+      continue;
+    }
+
+    String text = bot.messages[i].text;
+    String fromName = bot.messages[i].from_name;
+    Serial.print("📩 Message from ");
+    Serial.println(fromName);
+
+    if(text == "/start") {
+      Serial.println("👋 User started the bot");
+      String welcomeMessage = "🚀 *SELAMAT DATANG DI LoRa SECURITY SYSTEM*\n\n"
+                             "🔐 *Sistem Keamanan Pintar Berbasis LoRa*\n"
+                             "📡 Status: Aktif & Monitoring\n"
+                             "🎯 Mode: Deteksi Gerakan Otomatis\n\n"
+                             "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                             "📋 *MENU PERINTAH:*\n"
+                             "• /status - Cek status sistem\n"
+                             "• /stats - Lihat statistik deteksi\n"
+                             "• /help - Panduan lengkap\n"
+                             "• /info - Informasi perangkat\n"
+                             "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                             "✅ *Sistem siap melindungi area Anda!*\n"
+                             "🔔 Notifikasi otomatis akan dikirim saat ada gerakan terdeteksi.\n\n"
+                             "💡 _Ketik /help untuk informasi lebih lanjut_";
+      bot.sendMessage(chatId, welcomeMessage, "Markdown");
+      continue;
+    }
+    
+    if(text == "/status") {
+      Serial.println("ℹ️ User requested status");
+      unsigned long uptime = (millis() - systemStartTime) / 1000;
+      String statusMessage = "📊 *STATUS SISTEM LoRa*\n\n"
+                           "🟢 *Online & Aktif*\n"
+                           "📡 Sinyal LoRa: Terhubung\n"
+                           "🔋 Power: Normal\n"
+                           "📺 Display: Berfungsi\n\n"
+                           "⏰ *Waktu Operasi:* " + formatUptime(uptime) + "\n"
+                           "🎯 *Total Deteksi:* " + String(motionCount) + " kejadian\n"
+                           "📶 *RSSI Terakhir:* " + (motionCount > 0 ? lastRSSI + " dBm" : "Tidak ada data") + "\n\n"
+                           "✅ _Sistem berjalan dengan normal_";
+      bot.sendMessage(chatId, statusMessage, "Markdown");
+      continue;
+    }
+    
+    if(text == "/stats") {
+      Serial.println("📈 User requested statistics");
+      String statsMessage = "📈 *STATISTIK DETEKSI GERAKAN*\n\n"
+                           "🔢 *Total Deteksi:* " + String(motionCount) + " kejadian\n"
+                           "🕐 *Deteksi Terakhir:* " + (motionCount > 0 ? getLastDetectionTime() : "Belum ada") + "\n"
+                           "📶 *Kualitas Sinyal:*\n"
+                           "   • Terkuat: " + (motionCount > 0 ? String(maxRSSI) + " dBm" : "N/A") + "\n"
+                           "   • Terlemah: " + (motionCount > 0 ? String(minRSSI) + " dBm" : "N/A") + "\n\n"
+                           "📊 *Performa Sistem:*\n"
+                           "   • Uptime: " + formatUptime((millis() - systemStartTime) / 1000) + "\n"
+                           "   • Status: Optimal\n"
+                           "   • Mode: Monitoring Aktif";
+      bot.sendMessage(chatId, statsMessage, "Markdown");
+      continue;
+    }
+    
+    if(text == "/help") {
+      Serial.println("❓ User requested help");
+      String helpMessage = "📖 *PANDUAN LoRa SECURITY SYSTEM*\n\n"
+                          "🤖 *Tentang Bot:*\n"
+                          "Sistem keamanan otomatis yang mengirim notifikasi real-time saat mendeteksi gerakan di area yang dipantau.\n\n"
+                          "🎛️ *Perintah yang Tersedia:*\n\n"
+                          "• `/start` - Memulai bot\n"
+                          "• `/status` - Cek kondisi sistem\n"
+                          "• `/stats` - Lihat statistik lengkap\n"
+                          "• `/help` - Panduan ini\n"
+                          "• `/info` - Detail perangkat\n\n"
+                          "🔔 *Notifikasi Otomatis:*\n"
+                          "Bot akan mengirim alert otomatis berisi:\n"
+                          "• Waktu deteksi\n"
+                          "• Nomor kejadian\n"
+                          "• Kekuatan sinyal\n"
+                          "• Data sensor\n\n"
+                          "📞 *Dukungan:* -";
+      bot.sendMessage(chatId, helpMessage, "Markdown");
+      continue;
+    }
+    
+    if(text == "/info") {
+      Serial.println("ℹ️ User requested device info");
+      String infoMessage = "🔧 *INFORMASI PERANGKAT*\n\n"
+                         "📡 *Spesifikasi LoRa:*\n"
+                         "   • Frekuensi: 433 MHz\n"
+                         "   • Jangkauan: Long Distance\n"
+                         "   • Sync Word: 0xF3\n\n"
+                         "🖥️ *Hardware:*\n"
+                         "   • MCU: ESP32\n"
+                         "   • Display: OLED 128x64\n"
+                         "   • Sensor: PIR Motion\n"
+                         "   • Alarm: Buzzer Aktif\n\n"
+                         "💾 *Software:*\n"
+                         "   • Versi: LoRa Security v2.0\n"
+                         "   • Developer: Anynomous\n"
+                         "   • Build: Professional Edition\n\n"
+                         "🌐 *Konektivitas:*\n"
+                         "   • WiFi: Terhubung\n"
+                         "   • Telegram API: Aktif\n"
+                         "   • IP: " + WiFi.localIP().toString();
+      bot.sendMessage(chatId, infoMessage, "Markdown");
+      continue;
+    }
+    
+    // Handle unknown commands
+    String unknownMessage = "❓ *Perintah tidak dikenali*\n\n"
+                          "Silakan gunakan salah satu perintah berikut:\n"
+                          "• /status - Status sistem\n"
+                          "• /stats - Statistik deteksi\n"
+                          "• /help - Panduan lengkap\n"
+                          "• /info - Info perangkat\n\n"
+                          "💡 _Ketik /help untuk panduan lengkap_";
+    bot.sendMessage(chatId, unknownMessage, "Markdown");
+  }
+}
+
+String formatUptime(unsigned long seconds) {
+  if (seconds < 60) {
+    return String(seconds) + " detik";
+  } else if (seconds < 3600) {
+    return String(seconds / 60) + " menit " + String(seconds % 60) + " detik";
+  } else {
+    return String(seconds / 3600) + " jam " + String((seconds % 3600) / 60) + " menit";
+  }
+}
+
+String getLastDetectionTime() {
+  if (motionCount == 0) return "Belum ada deteksi";
+  
+  unsigned long timeSince = (millis() - lastMotionTime) / 1000;
+  if (timeSince < 60) {
+    return String(timeSince) + " detik yang lalu";
+  } else if (timeSince < 3600) {
+    return String(timeSince / 60) + " menit yang lalu";
+  } else {
+    return String(timeSince / 3600) + " jam yang lalu";
+  }
+}
+
+void sendTelegramMessage(const String &message) {
+  bot.sendMessage(chatId, message, "");
+  Serial.print("📨 Telegram message sent: ");
+  Serial.println(message);
+  Serial.println("=========================================");
+  Serial.println();
 }
 
 void showStartupScreen() {
@@ -260,6 +456,12 @@ void updateDisplay() {
 }
 
 void startEmergencyAlarm() {
+  // Send Telegram alert
+  String alertMessage = "🚨 Motion Detected!\nAlert #" + String(motionCount) +
+                      "\nRSSI: " + lastRSSI + " dBm\nMessage: " + lastMessage +
+                      "\nUptime: " + String((millis() - systemStartTime)/1000) + "s";
+  sendTelegramMessage(alertMessage);
+
   alarmActive = true;
   alarmStartTime = millis();
   lastBeepTime = millis();
@@ -277,6 +479,10 @@ void startEmergencyAlarm() {
   Serial.print(" | RSSI: ");
   Serial.print(lastRSSI);
   Serial.println(" dBm");
+  Serial.println("📨 Message: " + lastMessage + " successfully send to Telegram");
+  Serial.print("🕐 Uptime: ");
+  Serial.print((millis() - systemStartTime) / 1000);
+  Serial.println(" seconds since start");
 
   displayNeedsUpdate = true;
 }
@@ -324,6 +530,17 @@ void updateAnimation() {
 }
 
 void loop() {
+  if (millis() > lastTimeBotRan + botRequestDelay)  {
+    int numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+
+    while(numNewMessages) {
+      Serial.println("got response");
+      handleNewMessages(numNewMessages);
+      numNewMessages = bot.getUpdates(bot.last_message_received + 1);
+    }
+    lastTimeBotRan = millis();
+  }
+
   // Update systems
   updateEmergencyAlarm();
   updateAnimation();

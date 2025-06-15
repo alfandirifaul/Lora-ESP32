@@ -1,5 +1,5 @@
 /*********
-  Clean LoRa Motion Detection System
+  Clean Lora Security Detection System
   Enhanced Motion Detection Data Logger with Professional Display
   Fixed Emergency Alarm System with Proper Timing
 *********/
@@ -303,7 +303,7 @@ void showStartupScreen() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("LoRa Motion System");
+  display.println("Lora Security System");
   display.println("==================");
   display.println("Initializing...");
   display.println("");
@@ -333,6 +333,30 @@ void showReadyScreen() {
   display.println("Monitoring...");
   display.display();
 }
+
+void showEmergencyScreen() {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setTextColor(SSD1306_WHITE);
+
+  // Title
+  display.setCursor(10, 0);
+  display.println("!!ALERT!!");
+
+  // Separator
+  display.drawFastHLine(0, 20, display.width(), SSD1306_WHITE);
+
+  // Details
+  display.setTextSize(1);
+  display.setCursor(0, 28);
+  display.printf("Motion Detected! #%d\n", state.motionCount);
+  display.setCursor(0, 40);
+  display.printf("Signal: %s dBm\n", state.lastRSSI.c_str());
+  display.setCursor(0, 52);
+  display.printf("Time: %s", getCurrentTime().c_str());
+
+  display.display();
+} 
 
 // ═══════════════════════════════════════════════════════════
 //                    INTERRUPT SERVICE ROUTINE
@@ -439,7 +463,7 @@ void setup() {
   Serial.begin(115200);
   while (!Serial) delay(10);
   
-  Serial.println("🚀 LoRa Motion Detection System Starting...");
+  Serial.println("🚀 Lora Security Detection System Starting...");
   Serial.println("==========================================");
   
   state.systemStartTime = millis();
@@ -490,17 +514,18 @@ void processReceivedPacket() {
     state.lastMotionTime = millis();
     state.lastRSSI = String(LoRa.packetRssi());
     state.lastMessage = message;
-    
+
     logger.logMotionEvent(state.motionCount, state.lastRSSI, message);
+    showEmergencyScreen();
+
+    logger.logAlarmSequence("ACTIVATED", "Motion detection triggered");
+    startEmergencyAlarm();
     
     state.isBusy = true;
     state.isReady = false;
 
     logger.log(LOG_INFO, "TELEGRAM", "Sending motion alert", "Alert #" + String(state.motionCount));
     sendTelegramAlert();
-    
-    logger.logAlarmSequence("ACTIVATED", "Motion detection triggered");
-    startEmergencyAlarm();
     
     state.displayNeedsUpdate = true;
     
@@ -588,10 +613,10 @@ void startEmergencyAlarm() {
   }
   
   bool stateBuzzer = false;
-  for (int count = 0; count < 25; count++) {
+  for (int count = 0; count < 200; count++) {
     stateBuzzer = !stateBuzzer;
     digitalWrite(BUZZER_PIN, stateBuzzer);
-    delay(200);
+    delay(100);
     
     if (state.statusChanged) {
       sendReceiverStatus();
@@ -606,6 +631,7 @@ void startEmergencyAlarm() {
   Serial.println("✅ Emergency alarm deactivated");
   Serial.println("✅ Alarm deactivated - sending ready status");
   sendReceiverStatus();
+  showReadyScreen();
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -646,7 +672,7 @@ void updateDisplay() {
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
   
-  display.printf("LoRa Motion System\n");
+  display.printf("Lora Security System\n");
   display.printf("==================\n");
   display.printf("Alerts: %d\n", state.motionCount);
   display.printf("Uptime: %s\n", formatUptime((millis() - state.systemStartTime)/1000).c_str());

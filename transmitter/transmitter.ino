@@ -6,7 +6,7 @@
 
 #include <SPI.h>
 #include <LoRa.h>
-#include <WiFi.h>  // For MAC address
+#include <WiFi.h> 
 
 // ═══════════════════════════════════════════════════════════
 //                    HARDWARE CONFIGURATION
@@ -19,8 +19,8 @@
 
 // Sensor & Indicator Configuration
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
-#define BUZZER_PIN 13        // Status LED GPIO
-#define STATUS_LED 12      // Status LED (ESP32)
+#define BUZZER_PIN 13        // BUZZER GPIO
+#define STATUS_LED 12      //  Status LED GPIO
 
 // ═══════════════════════════════════════════════════════════
 //                    SYSTEM PARAMETERS
@@ -337,14 +337,14 @@ void handleMotionDetection() {
   motionCounter++;
   lastMotionTime = millis();
   motionCooldown = true;
-  
-  // Visual indication
-  emergencyBuzzer();
-  
+
   String motionDetails = "Sensor: PIR Pin " + String(PIR_PIN) + ", Time: " + getCurrentDateTime();
   
   // Try immediate transmission first
   bool success = sendMotionAlert();
+  
+  // Visual indication
+  emergencyBuzzer();
   
   // If transmission fails, queue the message
   if (!success) {

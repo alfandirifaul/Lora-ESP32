@@ -19,8 +19,8 @@
 
 // Sensor & Indicator Configuration
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
-#define LED_PIN 13        // Status LED GPIO
-#define STATUS_LED 12      // Built-in LED (ESP32)
+#define BUZZER_PIN 13        // Status LED GPIO
+#define STATUS_LED 12      // Status LED (ESP32)
 
 // ═══════════════════════════════════════════════════════════
 //                    SYSTEM PARAMETERS
@@ -273,13 +273,13 @@ void initializeGPIO() {
   logger.log(LOG_INFO, "HARDWARE", "Initializing GPIO pins", "");
   
   pinMode(PIR_PIN, INPUT);
-  pinMode(LED_PIN, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
   pinMode(STATUS_LED, OUTPUT);
   
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(BUZZER_PIN, LOW);
   digitalWrite(STATUS_LED, LOW);
   
-  logger.logSystemStatus("GPIO", "OK", "PIR: Pin " + String(PIR_PIN) + ", LED: Pin " + String(LED_PIN));
+  logger.logSystemStatus("GPIO", "OK", "PIR: Pin " + String(PIR_PIN) + ", Buzzer: Pin " + String(BUZZER_PIN));
 }
 
 void initializeLoRa() {
@@ -294,9 +294,9 @@ void initializeLoRa() {
     logger.log(LOG_WARNING, "NETWORK", "LoRa initialization attempt " + String(attempts), "");
     
     // Visual feedback during initialization attempts
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, HIGH);
     delay(100);
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
     delay(100);
   }
   
@@ -339,8 +339,7 @@ void handleMotionDetection() {
   motionCooldown = true;
   
   // Visual indication
-  digitalWrite(LED_PIN, HIGH);
-  digitalWrite(STATUS_LED, HIGH);
+  emergencyBuzzer();
   
   String motionDetails = "Sensor: PIR Pin " + String(PIR_PIN) + ", Time: " + getCurrentDateTime();
   
@@ -358,6 +357,16 @@ void handleMotionDetection() {
   
   // Log the detection using professional logger
   logger.logMotionEvent(motionCounter, success, motionDetails);
+}
+
+void emergencyBuzzer() {
+  digitalWrite(STATUS_LED, HIGH);
+  bool currentStatus = false;
+  for(int i = 0; i < 50; i++) {
+    currentStatus = !currentStatus;
+    digitalWrite(BUZZER_PIN, currentStatus);
+    delay(100);
+  }
 }
 
 bool sendMotionAlert() {
@@ -591,7 +600,7 @@ void checkMotionSensor() {
   // Check cooldown period
   if (motionCooldown && (millis() - lastMotionTime > MOTION_DELAY)) {
     motionCooldown = false;
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(STATUS_LED, LOW);
   }
   
@@ -616,10 +625,10 @@ void warmupPIRSensor() {
   
   // Visual feedback during warmup
   for (int i = 0; i < SENSOR_WARMUP/1000; i++) {
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, HIGH);
     digitalWrite(STATUS_LED, HIGH);
     delay(200);
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(STATUS_LED, LOW);
     delay(800);
     
@@ -656,10 +665,10 @@ void blinkError() {
   logger.log(LOG_CRITICAL, "SYSTEM", "Critical error - entering error state", "LED blinking pattern active");
   
   while(1) {
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(BUZZER_PIN, HIGH);
     digitalWrite(STATUS_LED, HIGH);
     delay(200);
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(STATUS_LED, LOW);
     delay(200);
   }

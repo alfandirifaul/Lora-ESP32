@@ -38,11 +38,9 @@ IPAddress subnet(255, 255, 0, 0);
 unsigned long previousMillis = 0;
 const long interval = 10000;  // interval to wait for Wi-Fi connection (milliseconds)
 
-// Set LED GPIO
-const int ledPin = 2;
-// Stores LED state
-
-String ledState;
+// WiFi Manager Credentials
+const char* wifiManagerSSID = "LoRa-Security-WIFI-MANAGER";
+const char* wifiManagerPassword = "LoRa1234"; // Open Access Point
 
 // Initialize LittleFS
 void initLittleFS() {
@@ -178,8 +176,9 @@ void setup() {
   else {
     // Connect to Wi-Fi network with SSID and password
     Serial.println("Setting AP (Access Point)");
-    // NULL sets an open Access Point
-    WiFi.softAP("LoRa-Security-WIFI-MANAGER", NULL);
+
+    // Start Access Point
+    WiFi.softAP(wifiManagerSSID, wifiManagerPassword);
 
     IPAddress IP = WiFi.softAPIP();
     Serial.print("AP IP address: ");

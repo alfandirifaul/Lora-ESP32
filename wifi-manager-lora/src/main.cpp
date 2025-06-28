@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
@@ -32,7 +31,7 @@ IPAddress localIP;
 // Set your Gateway IP address
 IPAddress localGateway;
 //IPAddress localGateway(192, 168, 1, 1); //hardcoded
-IPAddress subnet(255, 255, 0, 0);
+IPAddress subnet(255, 255, 255, 0);
 
 // Timer variables
 unsigned long previousMillis = 0;
@@ -92,14 +91,15 @@ bool initWiFi() {
   }
 
   WiFi.mode(WIFI_STA);
-  localIP.fromString(ip.c_str());
-  localGateway.fromString(gateway.c_str());
+
+  //localIP.fromString(ip.c_str());
+  //localGateway.fromString(gateway.c_str());
 
 
-  if (!WiFi.config(localIP, localGateway, subnet)){
-    Serial.println("STA Failed to configure");
-    return false;
-  }
+  // if (!WiFi.config(localIP, localGateway, subnet)){
+  //   Serial.println("STA Failed to configure");
+  //   return false;
+  // }
   WiFi.begin(ssid.c_str(), pass.c_str());
   Serial.println("Connecting to WiFi...");
 
@@ -119,19 +119,6 @@ bool initWiFi() {
   return true;
 }
 
-// Replaces placeholder with LED state value
-String processor(const String& var) {
-  if(var == "STATE") {
-    if(digitalRead(ledPin)) {
-      ledState = "ON";
-    }
-    else {
-      ledState = "OFF";
-    }
-    return ledState;
-  }
-  return String();
-}
 
 void setup() {
   // Serial port for debugging purposes
@@ -139,10 +126,6 @@ void setup() {
 
   initLittleFS();
 
-  // Set GPIO 2 as an OUTPUT
-  pinMode(ledPin, OUTPUT);
-  digitalWrite(ledPin, LOW);
-  
   // Load values saved in LittleFS
   ssid = readFile(LittleFS, ssidPath);
   pass = readFile(LittleFS, passPath);
@@ -154,24 +137,20 @@ void setup() {
   Serial.println(gateway);
 
   if(initWiFi()) {
-    // Route for root / web page
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      request->send(LittleFS, "/index.html", "text/html", false, processor);
-    });
+    server.begin();
+
     server.serveStatic("/", LittleFS, "/");
-    
-    // Route to set GPIO state to HIGH
-    server.on("/on", HTTP_GET, [](AsyncWebServerRequest *request) {
-      digitalWrite(ledPin, HIGH);
-      request->send(LittleFS, "/index.html", "text/html", false, processor);
+    Serial.println("Connected to WiFi, starting web server...");
+
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        Serial.println("Serving index.html");
+      request->send(LittleFS, "/index.html", "text/html");
     });
 
-    // Route to set GPIO state to LOW
-    server.on("/off", HTTP_GET, [](AsyncWebServerRequest *request) {
-      digitalWrite(ledPin, LOW);
-      request->send(LittleFS, "/index.html", "text/html", false, processor);
+    server.on("/wifimanager.html", HTTP_GET, [](AsyncWebServerRequest *request){
+        Serial.println("Serving wifimanager.html");
+      request->send(LittleFS, "/wifimanager.html", "text/html");
     });
-    server.begin();
   }
   else {
     // Connect to Wi-Fi network with SSID and password

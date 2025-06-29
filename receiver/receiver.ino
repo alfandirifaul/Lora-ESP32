@@ -407,6 +407,15 @@ void initializeHardware() {
   showStartupScreen();
 }
 
+void initializeBuzzer() {
+  logger.log(LOG_INFO, "BUZZER", "Initialize Buzzer");
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(100);
+  digitalWrite(BUZZER_PIN, LOW);
+  logger.log(LOG_INFO, "BUZZER", "Buzzer Initialize Successfully");
+
+}
+
 void initializeWiFi() {
   logger.log(LOG_INFO, "NETWORK", "Connecting to WiFi", "SSID: " + String(WIFI_SSID));
   Serial.println("🌐 Connecting to WiFi...");
@@ -416,6 +425,7 @@ void initializeWiFi() {
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    wifiNotConnectedAlarm();
   }
   
   logger.log(LOG_INFO, "NETWORK", "WiFi connected successfully", "IP: " + WiFi.localIP().toString());
@@ -475,6 +485,7 @@ void setup() {
   logger.log(LOG_INFO, "SYSTEM", "Starting receiver initialization", "");
   
   initializeHardware();
+  initializeBuzzer();
   initializeWiFi();
   initializeTelegram();
   initializeLoRa();
@@ -632,6 +643,14 @@ void startEmergencyAlarm() {
   Serial.println("✅ Alarm deactivated - sending ready status");
   sendReceiverStatus();
   showReadyScreen();
+}
+
+void wifiNotConnectedAlarm() {
+  // Non-blocking: beep buzzer in a short pattern
+  digitalWrite(BUZZER_PIN, HIGH);
+  delay(100);
+  digitalWrite(BUZZER_PIN, LOW);
+  delay(400);
 }
 
 // ═══════════════════════════════════════════════════════════

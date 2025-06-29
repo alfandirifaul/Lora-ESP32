@@ -440,6 +440,21 @@ void showEmergencyScreen()
   display.printf("Time: %s", getCurrentTime().c_str());
   display.display();
 }
+void showWiFiManagerScreen(const char* ssid, const char* password, IPAddress apIP) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("WiFi Manager Mode");
+  display.println("================");
+  display.println("SSID: ");
+  display.println(ssid);
+  display.print("PASS: ");
+  display.println(password);
+  display.print("AP IP: ");
+  display.println(apIP);
+  display.display();
+}
 
 // ========== INTERRUPT SERVICE ROUTINE ==========
 void IRAM_ATTR onLoRaReceive(int packetSize)
@@ -687,12 +702,18 @@ void updateDisplay()
   state.displayNeedsUpdate = false;
 }
 
+// Add a global flag to indicate WiFi Manager (AP) mode
+bool inWiFiManagerMode = false;
+
 // ========== MAIN SETUP AND LOOP ==========
 void setup()
 {
   Serial.begin(115200);
 
   initLittleFS();
+  initializeHardware();
+  initializeBuzzer();
+  initializeLoRa();
 
   // Load values saved in LittleFS
   ssid = readFile(LittleFS, ssidPath);
@@ -717,6 +738,19 @@ void setup()
               {
         Serial.println("Serving wifimanager.html");
       request->send(LittleFS, "/wifimanager.html", "text/html"); });
+
+    // Only after WiFi/AP and web server are up, initialize hardware and LoRa
+    state.systemStartTime = millis();
+    initializeReceiverID();
+    logger.setDeviceName(state.receiverID);
+    logger.init();
+    logger.log(LOG_INFO, "SYSTEM", "Starting receiver initialization", "");
+    
+    initializeTelegram();
+    showReadyScreen();
+    logger.log(LOG_INFO, "SYSTEM", "System ready for monitoring", "All components operational");
+    logger.logSystemStats();
+    inWiFiManagerMode = false;
   }
   else
   {
@@ -735,6 +769,8 @@ void setup()
     Serial.println(wifiManagerSSID);
     Serial.print("AP Password: ");
     Serial.println(wifiManagerPassword);
+    showWiFiManagerScreen(wifiManagerSSID, wifiManagerPassword, IP); // Show info on OLED
+    inWiFiManagerMode = true;
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
               { request->send(LittleFS, "/wifimanager.html", "text/html"); });
     server.serveStatic("/", LittleFS, "/");
@@ -775,26 +811,14 @@ void setup()
       ESP.restart(); });
     server.begin();
   }
-
-  // Only after WiFi/AP and web server are up, initialize hardware and LoRa
-  state.systemStartTime = millis();
-  initializeReceiverID();
-  logger.setDeviceName(state.receiverID);
-  logger.init();
-  logger.log(LOG_INFO, "SYSTEM", "Starting receiver initialization", "");
-  initializeHardware();
-  initializeBuzzer();
-  initializeTelegram();
-  initializeLoRa();
-  showReadyScreen();
-  logger.log(LOG_INFO, "SYSTEM", "System ready for monitoring", "All components operational");
-  logger.logSystemStats();
 }
 
 void loop()
 {
   processReceivedPacket();
   sendReceiverStatus();
-  updateDisplay();
+  if (!inWiFiManagerMode) {
+    updateDisplay();
+  }
   delay(50);
 }

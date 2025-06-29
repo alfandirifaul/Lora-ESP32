@@ -707,15 +707,12 @@ void setup()
   if (initWiFi())
   {
     server.begin();
-
     server.serveStatic("/", LittleFS, "/");
     Serial.println("Connected to WiFi, starting web server...");
-
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
               {
         Serial.println("Serving index.html");
       request->send(LittleFS, "/index.html", "text/html"); });
-
     server.on("/wifimanager.html", HTTP_GET, [](AsyncWebServerRequest *request)
               {
         Serial.println("Serving wifimanager.html");
@@ -723,61 +720,54 @@ void setup()
   }
   else
   {
-    // Connect to Wi-Fi network with SSID and password
     Serial.println("Setting AP (Access Point)");
-
-    // Start Access Point
-    WiFi.softAP(wifiManagerSSID, wifiManagerPassword);
-
+    bool apResult = WiFi.softAP(wifiManagerSSID, wifiManagerPassword, 1, 0, 4);
+    if (apResult) {
+      Serial.println("[DEBUG] WiFi.softAP started successfully.");
+    } else {
+      Serial.println("[ERROR] WiFi.softAP failed to start!");
+    }
+    delay(1000);
     IPAddress IP = WiFi.softAPIP();
     Serial.print("AP IP address: ");
     Serial.println(IP);
-
-    // Web Server Root URL
+    Serial.print("AP SSID: ");
+    Serial.println(wifiManagerSSID);
+    Serial.print("AP Password: ");
+    Serial.println(wifiManagerPassword);
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request)
               { request->send(LittleFS, "/wifimanager.html", "text/html"); });
-
     server.serveStatic("/", LittleFS, "/");
-
     server.on("/", HTTP_POST, [](AsyncWebServerRequest *request)
               {
       int params = request->params();
       for(int i=0;i<params;i++){
         const AsyncWebParameter* p = request->getParam(i);
         if(p->isPost()){
-          // HTTP POST ssid value
           if (p->name() == PARAM_INPUT_1) {
             ssid = p->value().c_str();
             Serial.print("SSID set to: ");
             Serial.println(ssid);
-            // Write file to save value
             writeFile(LittleFS, ssidPath, ssid.c_str());
           }
-          // HTTP POST pass value
           if (p->name() == PARAM_INPUT_2) {
             pass = p->value().c_str();
             Serial.print("Password set to: ");
             Serial.println(pass);
-            // Write file to save value
             writeFile(LittleFS, passPath, pass.c_str());
           }
-          // HTTP POST ip value
           if (p->name() == PARAM_INPUT_3) {
             ip = p->value().c_str();
             Serial.print("IP Address set to: ");
             Serial.println(ip);
-            // Write file to save value
             writeFile(LittleFS, ipPath, ip.c_str());
           }
-          // HTTP POST gateway value
           if (p->name() == PARAM_INPUT_4) {
             gateway = p->value().c_str();
             Serial.print("Gateway set to: ");
             Serial.println(gateway);
-            // Write file to save value
             writeFile(LittleFS, gatewayPath, gateway.c_str());
           }
-          //Serial.printf("POST[%s]: %s\n", p->name().c_str(), p->value().c_str());
         }
       }
       request->send(200, "text/plain", "Done. ESP will restart, connect to your router and go to IP address: " + ip);
@@ -786,7 +776,7 @@ void setup()
     server.begin();
   }
 
-  // After WiFi is connected:
+  // Only after WiFi/AP and web server are up, initialize hardware and LoRa
   state.systemStartTime = millis();
   initializeReceiverID();
   logger.setDeviceName(state.receiverID);

@@ -156,6 +156,7 @@ bool initWiFi()
 #define LORA_RST 14
 #define LORA_DIO0 2
 #define BUZZER_PIN 12
+#define RESET_BUTTON_PIN 25  // Physical reset button pin
 
 // ========== DISPLAY CONFIGURATION ==========
 #define SCREEN_WIDTH 128
@@ -191,6 +192,11 @@ struct SystemState {
   bool statusChanged = false;
 };
 SystemState state;
+
+// ========== RESET BUTTON VARIABLES ==========
+volatile bool resetButtonPressed = false;
+unsigned long lastButtonPress = 0;
+const unsigned long debounceDelay = 50; // 50ms debounce delay
 
 // ========== PROFESSIONAL LOGGING SYSTEM ==========
 enum LogLevel
@@ -462,6 +468,16 @@ void IRAM_ATTR onLoRaReceive(int packetSize)
   state.packetReceived = true;
 }
 
+// ========== RESET BUTTON INTERRUPT ==========
+void IRAM_ATTR onResetButtonPress()
+{
+  unsigned long currentTime = millis();
+  if (currentTime - lastButtonPress > debounceDelay) {
+    resetButtonPressed = true;
+    lastButtonPress = currentTime;
+  }
+}
+
 // ========== INITIALIZATION FUNCTIONS ==========
 void initializeReceiverID()
 {
@@ -479,6 +495,12 @@ void initializeHardware()
   logger.log(LOG_INFO, "HARDWARE", "Initializing hardware components", "");
   pinMode(BUZZER_PIN, OUTPUT);
   digitalWrite(BUZZER_PIN, LOW);
+  
+  // Initialize reset button
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(RESET_BUTTON_PIN), onResetButtonPress, FALLING);
+  Serial.println("✅ Reset button initialized on pin " + String(RESET_BUTTON_PIN));
+  
   Wire.begin();
   Serial.println("📺 Initializing OLED Display...");
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C))
@@ -702,6 +724,46 @@ void updateDisplay()
   state.displayNeedsUpdate = false;
 }
 
+// ========== RESET BUTTON HANDLER ==========
+void handleResetButton()
+{
+  if (resetButtonPressed) {
+    resetButtonPressed = false;
+    
+    Serial.println("🔄 Reset button pressed!");
+    logger.log(LOG_INFO, "SYSTEM", "Manual reset button pressed", "Restarting ESP32");
+    
+    // Show restart message on display
+    display.clearDisplay();
+    display.setTextSize(2);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("RESTARTING");
+    display.setTextSize(1);
+    display.setCursor(0, 30);
+    display.println("Please wait...");
+    display.display();
+    
+    // Brief buzzer notification
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(200);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(100);
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(200);
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(100);
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(500);
+    digitalWrite(BUZZER_PIN, LOW);
+    
+    delay(1000); // Give user time to see the message
+    
+    Serial.println("🚀 Restarting ESP32...");
+    ESP.restart();
+  }
+}
+
 // Add a global flag to indicate WiFi Manager (AP) mode
 bool inWiFiManagerMode = false;
 
@@ -815,6 +877,9 @@ void setup()
 
 void loop()
 {
+  // Handle reset button
+  handleResetButton();
+  
   processReceivedPacket();
   sendReceiverStatus();
   if (!inWiFiManagerMode) {

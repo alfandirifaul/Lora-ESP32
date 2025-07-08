@@ -1,3 +1,6 @@
+#define BLYNK_TEMPLATE_ID "TMPL6xc3jF9IV"
+#define BLYNK_TEMPLATE_NAME "LoRa"
+
 #include "LittleFS.h"
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
@@ -11,6 +14,7 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <Wire.h>
+#include <BlynkSimpleEsp32.h>
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
@@ -49,6 +53,20 @@ const long interval =
 // WiFi Manager Credentials
 const char *wifiManagerSSID = "LoRa-Security-WIFI-MANAGER";
 const char *wifiManagerPassword = "LoRa1234"; // Open Access Point
+
+// ========== BLYNK CONFIGURATION ==========
+#define BLYNK_PRINT Serial
+#define BLYNK_EVENT_MOTION "alert_motion_detection"
+#define BLYNK_EVENT_LORA_CONNECTION "connection_lost"
+
+// Blynk Auth Token (replace with your own)
+char blynkAuth[] = "C6Glsc-JhP-2p0dSrQXWduvI1HSp6pl1";
+
+// Blynk Virtual Pins
+#define VPIN_LED_TRANSMITTER V0
+#define VPIN_ALERT_DATA V1
+#define VPIN_LED_RECEIVER V2
+#define VPIN_BUZZER V4
 
 // Initialize LittleFS
 void initLittleFS() {
@@ -607,6 +625,8 @@ void sendReceiverStatus() {
     state.prevReady = state.isReady;
     state.statusChanged = false;
     state.lastStatusSent = millis();
+    // Blynk: LED receiver ON if ready
+    Blynk.virtualWrite(VPIN_LED_RECEIVER, state.isReady ? 1 : 0);
   } else {
     Serial.println("❌ Failed to send status update");
   }
@@ -625,6 +645,8 @@ void startEmergencyAlarm() {
     Serial.println("🚨 Alarm state changed - sending status update");
     sendReceiverStatus();
   }
+  // Blynk: Turn on buzzer
+  Blynk.virtualWrite(VPIN_BUZZER, 1);
   bool stateBuzzer = false;
   for (int count = 0; count < 200; count++) {
     stateBuzzer = !stateBuzzer;
@@ -638,6 +660,8 @@ void startEmergencyAlarm() {
   state.alarmActive = false;
   state.isReady = true;
   state.buzzerState = false;
+  // Blynk: Turn off buzzer
+  Blynk.virtualWrite(VPIN_BUZZER, 0);
   Serial.println("✅ Emergency alarm deactivated");
   Serial.println("✅ Alarm deactivated - sending ready status");
   sendReceiverStatus();
@@ -702,6 +726,10 @@ void processReceivedPacket() {
     logger.logMotionEvent(state.motionCount, state.lastRSSI, message);
     showEmergencyScreen();
     logger.logAlarmSequence("ACTIVATED", "Motion detection triggered");
+    // Blynk: Set alert data, buzzer, and event
+    Blynk.virtualWrite(VPIN_ALERT_DATA, message);
+    Blynk.virtualWrite(VPIN_BUZZER, 1);
+    Blynk.logEvent(BLYNK_EVENT_MOTION, "Motion detected!");
     startEmergencyAlarm();
     state.isBusy = true;
     state.isReady = false;
@@ -800,7 +828,7 @@ void handleResetButton() {
         display.display();
 
         delay(2000);
-        Serial.println("� Restarting ESP32 after config reset...");
+        Serial.println("🚀 Restarting ESP32 after config reset...");
         ESP.restart();
 
       } else if (pressDuration < longPressDelay) {
@@ -890,6 +918,7 @@ void setup() {
                "All components operational");
     logger.logSystemStats();
     inWiFiManagerMode = false;
+    Blynk.begin(blynkAuth, ssid.c_str(), pass.c_str());
   } else {
     Serial.println("Setting AP (Access Point)");
     bool apResult = WiFi.softAP(wifiManagerSSID, wifiManagerPassword, 1, 0, 4);
@@ -964,5 +993,6 @@ void loop() {
   if (!inWiFiManagerMode) {
     updateDisplay();
   }
+  Blynk.run();
   delay(50);
 }

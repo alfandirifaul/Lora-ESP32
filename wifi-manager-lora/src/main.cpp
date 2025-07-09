@@ -142,6 +142,10 @@ void deleteConfigFiles() {
                  "Manager mode.");
 }
 
+// Forward declarations
+void showWiFiConnectingScreen();
+void showWiFiFailedScreen();
+
 // Initialize WiFi
 bool initWiFi() {
   if (ssid == "" || ip == "") {
@@ -150,6 +154,9 @@ bool initWiFi() {
   }
 
   WiFi.mode(WIFI_STA);
+  
+  // Show connecting screen
+  showWiFiConnectingScreen();
 
   // localIP.fromString(ip.c_str());
   // localGateway.fromString(gateway.c_str());
@@ -168,8 +175,11 @@ bool initWiFi() {
     currentMillis = millis();
     if (currentMillis - previousMillis >= interval) {
       Serial.println("Failed to connect.");
+      showWiFiFailedScreen();
+      delay(2000);
       return false;
     }
+    delay(100);
   }
 
   Serial.println("WiFi connected successfully.");
@@ -199,6 +209,36 @@ bool initWiFi() {
 #define SCREEN_HEIGHT 64
 #define OLED_RESET -1
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// ========== DISPLAY FUNCTIONS (IMPLEMENTATIONS) ==========
+void showWiFiConnectingScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("Connecting to WiFi");
+  display.println("=================");
+  display.println("SSID:");
+  display.println(ssid);
+  display.println("");
+  display.println("Please wait...");
+  display.display();
+}
+
+void showWiFiFailedScreen() {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(0, 0);
+  display.println("WiFi Connection");
+  display.println("Failed!");
+  display.println("===============");
+  display.println("Starting AP Mode");
+  display.println("");
+  display.println("Please configure");
+  display.println("WiFi settings");
+  display.display();
+}
 
 // ========== SYSTEM STATE VARIABLES ==========
 struct SystemState {
@@ -234,8 +274,9 @@ volatile bool resetButtonPressed = false;
 unsigned long lastButtonPress = 0;
 unsigned long buttonPressStart = 0;
 const unsigned long debounceDelay = 50;    // 50ms debounce delay
-const unsigned long longPressDelay = 3000; // 3 seconds for long press
+const unsigned long longPressDelay = 2000; // 2 seconds for long press
 bool isLongPress = false;
+bool buttonCurrentlyPressed = false;
 
 // ========== PROFESSIONAL LOGGING SYSTEM ==========
 enum LogLevel { LOG_DEBUG, LOG_INFO, LOG_WARNING, LOG_ERROR, LOG_CRITICAL };
@@ -472,7 +513,7 @@ void showEmergencyScreen() {
   display.drawFastHLine(0, 20, display.width(), SSD1306_WHITE);
   display.setTextSize(1);
   display.setCursor(0, 28);
-  display.printf("Motion Detected! #%d\n", state.motionCount);
+  display.printf("Motion Detected!");
   display.setCursor(0, 40);
   display.printf("Signal: %s dBm\n", state.lastRSSI.c_str());
   display.setCursor(0, 52);
@@ -487,11 +528,11 @@ void showWiFiManagerScreen(const char *ssid, const char *password,
   display.setCursor(0, 0);
   display.println("WiFi Manager Mode");
   display.println("================");
-  display.println("SSID: ");
+  display.println("SSID:");
   display.println(ssid);
-  display.print("PASS: ");
+  display.println("PASS:");
   display.println(password);
-  display.print("AP IP: ");
+  display.print("IP: ");
   display.println(apIP);
   display.display();
 }
@@ -503,9 +544,16 @@ void IRAM_ATTR onLoRaReceive(int packetSize) { state.packetReceived = true; }
 void IRAM_ATTR onResetButtonPress() {
   unsigned long currentTime = millis();
   if (currentTime - lastButtonPress > debounceDelay) {
-    if (digitalRead(RESET_BUTTON_PIN) == LOW) { // Button pressed
-      resetButtonPressed = true;
+    bool buttonState = digitalRead(RESET_BUTTON_PIN) == LOW;
+    
+    if (buttonState && !buttonCurrentlyPressed) {
+      // Button just pressed
+      buttonCurrentlyPressed = true;
       buttonPressStart = currentTime;
+      resetButtonPressed = true;
+    } else if (!buttonState && buttonCurrentlyPressed) {
+      // Button just released
+      buttonCurrentlyPressed = false;
     }
     lastButtonPress = currentTime;
   }
@@ -734,7 +782,7 @@ void processReceivedPacket() {
     state.isBusy = true;
     state.isReady = false;
     logger.log(LOG_INFO, "TELEGRAM", "Sending motion alert",
-               "Alert #" + String(state.motionCount));
+               "Alert");
     sendTelegramAlert();
     state.displayNeedsUpdate = true;
     state.isBusy = false;
@@ -768,75 +816,65 @@ void updateDisplay() {
 // ========== RESET BUTTON HANDLER ==========
 void handleResetButton() {
   if (resetButtonPressed) {
-    // Check if button is still pressed (for long press detection)
-    if (digitalRead(RESET_BUTTON_PIN) == LOW) {
-      unsigned long pressDuration = millis() - buttonPressStart;
-
-      if (pressDuration >= longPressDelay && !isLongPress) {
-        isLongPress = true;
-
-        Serial.println(
-            "🔄 Long press detected! Deleting configuration files...");
-        logger.log(LOG_INFO, "SYSTEM",
-                   "Long press detected - deleting config files",
-                   "3+ seconds press");
-
-        // Show config reset message on display
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 0);
-        display.println("CONFIG");
-        display.println("RESET");
-        display.setTextSize(1);
-        display.setCursor(0, 40);
-        display.println("Deleting files...");
-        display.println("Release button");
-        display.display();
-
-        // Triple beep for config reset
-        for (int i = 0; i < 3; i++) {
-          digitalWrite(BUZZER_PIN, HIGH);
-          delay(150);
-          digitalWrite(BUZZER_PIN, LOW);
-          delay(150);
-        }
-
-        // Delete configuration files
-        deleteConfigFiles();
-
-        delay(2000);
+    unsigned long currentTime = millis();
+    unsigned long pressDuration = currentTime - buttonPressStart;
+    
+    // Check if button is still pressed and long press duration reached
+    if (buttonCurrentlyPressed && pressDuration >= longPressDelay && !isLongPress) {
+      isLongPress = true;
+      
+      Serial.println("🔄 Long press detected! Deleting configuration files...");
+      logger.log(LOG_INFO, "SYSTEM", "Long press detected - deleting config files", "2+ seconds press");
+      
+      // Show config reset message on display
+      display.clearDisplay();
+      display.setTextSize(2);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 0);
+      display.println("CONFIG");
+      display.println("RESET");
+      display.setTextSize(1);
+      display.setCursor(0, 40);
+      display.println("Deleting files...");
+      display.display();
+      
+      // Triple beep for config reset
+      for (int i = 0; i < 3; i++) {
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(150);
+        digitalWrite(BUZZER_PIN, LOW);
+        delay(150);
       }
-    } else {
-      // Button released
+      
+      // Delete configuration files immediately
+      deleteConfigFiles();
+      
+      // Show restart message
+      display.clearDisplay();
+      display.setTextSize(2);
+      display.setTextColor(SSD1306_WHITE);
+      display.setCursor(0, 0);
+      display.println("RESTARTING");
+      display.setTextSize(1);
+      display.setCursor(0, 30);
+      display.println("Config deleted");
+      display.println("Please wait...");
+      display.display();
+      
+      delay(1000);
+      Serial.println("🚀 Restarting ESP32 after config reset...");
+      ESP.restart();
+    }
+    
+    // Handle button release
+    if (!buttonCurrentlyPressed) {
       resetButtonPressed = false;
-      unsigned long pressDuration = millis() - buttonPressStart;
-
-      if (isLongPress) {
-        // Long press was detected, restart to WiFi Manager mode
-        isLongPress = false;
-
-        display.clearDisplay();
-        display.setTextSize(2);
-        display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0, 0);
-        display.println("RESTARTING");
-        display.setTextSize(1);
-        display.setCursor(0, 30);
-        display.println("Config deleted");
-        display.println("Please wait...");
-        display.display();
-
-        delay(2000);
-        Serial.println("🚀 Restarting ESP32 after config reset...");
-        ESP.restart();
-
-      } else if (pressDuration < longPressDelay) {
+      
+      if (!isLongPress && pressDuration < longPressDelay) {
         // Short press - normal restart
         Serial.println("🔄 Short press detected - normal restart");
-        logger.log(LOG_INFO, "SYSTEM", "Manual reset button pressed",
-                   "Restarting ESP32");
-
+        logger.log(LOG_INFO, "SYSTEM", "Manual reset button pressed", "Restarting ESP32");
+        
         // Show restart message on display
         display.clearDisplay();
         display.setTextSize(2);
@@ -847,30 +885,71 @@ void handleResetButton() {
         display.setCursor(0, 30);
         display.println("Please wait...");
         display.display();
-
+        
         // Brief buzzer notification
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(200);
-        digitalWrite(BUZZER_PIN, LOW);
-        delay(100);
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(200);
-        digitalWrite(BUZZER_PIN, LOW);
-        delay(100);
-        digitalWrite(BUZZER_PIN, HIGH);
-        delay(500);
-        digitalWrite(BUZZER_PIN, LOW);
-
+        for (int i = 0; i < 3; i++) {
+          digitalWrite(BUZZER_PIN, HIGH);
+          delay(200);
+          digitalWrite(BUZZER_PIN, LOW);
+          delay(100);
+        }
+        
         delay(1000);
         Serial.println("🚀 Restarting ESP32...");
         ESP.restart();
       }
+      
+      isLongPress = false;
     }
   }
 }
 
 // Add a global flag to indicate WiFi Manager (AP) mode
 bool inWiFiManagerMode = false;
+
+// ========== WIFI CONNECTION MONITORING ==========
+void monitorWiFiConnection() {
+  static unsigned long lastWiFiCheck = 0;
+  static bool wasConnected = false;
+  
+  // Check WiFi status every 5 seconds
+  if (millis() - lastWiFiCheck > 5000) {
+    bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
+    
+    if (wasConnected && !currentlyConnected && !inWiFiManagerMode) {
+      // WiFi connection lost
+      Serial.println("⚠️ WiFi connection lost! Switching to WiFi Manager mode...");
+      logger.log(LOG_WARNING, "WIFI", "Connection lost - switching to AP mode", "");
+      
+      // Show WiFi failed screen
+      showWiFiFailedScreen();
+      delay(2000);
+      
+      // Start WiFi Manager mode
+      inWiFiManagerMode = true;
+      
+      // Start AP mode
+      WiFi.softAP(wifiManagerSSID, wifiManagerPassword, 1, 0, 4);
+      IPAddress IP = WiFi.softAPIP();
+      Serial.print("AP IP address: ");
+      Serial.println(IP);
+      
+      // Show WiFi manager screen
+      showWiFiManagerScreen(wifiManagerSSID, wifiManagerPassword, IP);
+      
+      // Notify with buzzer
+      for (int i = 0; i < 5; i++) {
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(100);
+        digitalWrite(BUZZER_PIN, LOW);
+        delay(100);
+      }
+    }
+    
+    wasConnected = currentlyConnected;
+    lastWiFiCheck = millis();
+  }
+}
 
 // ========== MAIN SETUP AND LOOP ==========
 void setup() {
@@ -988,11 +1067,24 @@ void loop() {
   // Handle reset button
   handleResetButton();
 
-  processReceivedPacket();
-  sendReceiverStatus();
-  if (!inWiFiManagerMode) {
+  // Monitor WiFi connection status
+  monitorWiFiConnection();
+
+  // In WiFi Manager mode, show the WiFi config screen continuously
+  if (inWiFiManagerMode) {
+    static unsigned long lastDisplayUpdate = 0;
+    if (millis() - lastDisplayUpdate > 3000) { // Update every 3 seconds
+      IPAddress IP = WiFi.softAPIP();
+      showWiFiManagerScreen(wifiManagerSSID, wifiManagerPassword, IP);
+      lastDisplayUpdate = millis();
+    }
+  } else {
+    // Normal operation mode
+    processReceivedPacket();
+    sendReceiverStatus();
     updateDisplay();
+    Blynk.run();
   }
-  Blynk.run();
+  
   delay(50);
 }

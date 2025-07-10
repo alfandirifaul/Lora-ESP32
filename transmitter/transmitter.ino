@@ -27,6 +27,7 @@
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
 #define BUZZER_PIN 27        // BUZZER GPIO
 #define STATUS_LED 12      //  Status LED GPIO
+#define RESET_BUTTON_PIN 25 // Physical reset button GPIO
 
 
 // ═══════════════════════════════════════════════════════════
@@ -257,6 +258,12 @@ private:
 // Global logger instance
 ProfessionalLogger logger("UNKNOWN");
 
+volatile bool resetRequested = false;
+
+void IRAM_ATTR handleResetInterrupt() {
+  resetRequested = true;
+}
+
 // RTC instance
 RTC_DS3231 rtc;
 bool rtcAvailable = false;
@@ -295,14 +302,13 @@ void initializeSystem() {
 
 void initializeGPIO() {
   logger.log(LOG_INFO, "HARDWARE", "Initializing GPIO pins", "");
-  
   pinMode(PIR_PIN, INPUT);
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(STATUS_LED, OUTPUT);
-  
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(digitalPinToInterrupt(RESET_BUTTON_PIN), handleResetInterrupt, FALLING);
   digitalWrite(BUZZER_PIN, LOW);
   digitalWrite(STATUS_LED, LOW);
-  
   logger.logSystemStatus("GPIO", "OK", "PIR: Pin " + String(PIR_PIN) + ", Buzzer: Pin " + String(BUZZER_PIN));
 }
 
@@ -722,7 +728,20 @@ void setup() {
 
 void loop() {
   if (!systemReady) return;
-  
+  if (resetRequested) {
+    logger.log(LOG_WARNING, "SYSTEM", "Reset button pressed, restarting ESP32", "");
+    digitalWrite(STATUS_LED, LOW); 
+    for(int i = 0; i < 5; i++) {
+      digitalWrite(BUZZER_PIN, HIGH);
+      delay(100);
+      digitalWrite(BUZZER_PIN, LOW);
+      delay(100);
+    }
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(300); // debounce
+    
+    ESP.restart();
+  }
   // LoRa receive handler
   if (LoRa.parsePacket()) {
     String message = "";

@@ -1014,10 +1014,7 @@ void setup() {
     server.begin();
     server.serveStatic("/", LittleFS, "/");
     Serial.println("Connected to WiFi, starting web server...");
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-      Serial.println("Serving index.html");
-      request->send(LittleFS, "/index.html", "text/html");
-    });
+    
     server.on("/wifimanager.html", HTTP_GET,
               [](AsyncWebServerRequest *request) {
                 Serial.println("Serving wifimanager.html");

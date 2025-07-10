@@ -8,6 +8,7 @@
 #include <LoRa.h>
 #include <WiFi.h>
 #include <RTClib.h>    // DS3231 RTC Library 
+#include <EEPROM.h>
 
 // ═══════════════════════════════════════════════════════════
 //                    HARDWARE CONFIGURATION
@@ -20,11 +21,13 @@
 
 // RTC Module Configuration
 // DS3231 uses I2C: SDA (GPIO21), SCL (GPIO22) on ESP32
+// #define ALERT_CLOCK_TIME 16 // Send the alert motion after 16 o'clock default time (REMOVED, use variable instead)
 
 // Sensor & Indicator Configuration
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
 #define BUZZER_PIN 27        // BUZZER GPIO
 #define STATUS_LED 12      //  Status LED GPIO
+
 
 // ═══════════════════════════════════════════════════════════
 //                    SYSTEM PARAMETERS
@@ -44,6 +47,10 @@ const int MAX_QUEUE_SIZE = 10;                  // Maximum queued messages
 const unsigned long RETRY_INTERVAL = 5000;     // Retry transmission every 5 seconds
 const int MAX_RETRY_ATTEMPTS = 3;               // Maximum retry attempts per message
 
+// EEPROM Configuration
+#define EEPROM_SIZE 4
+#define EEPROM_ADDR_ALERT_TIME 0
+
 // ═══════════════════════════════════════════════════════════
 //                    QUEUE STRUCTURE
 // ═══════════════════════════════════════════════════════════
@@ -56,6 +63,8 @@ struct QueuedMessage {
   String datetime;
   String unixTimestamp;
   unsigned long uptime;
+  bool rtcAvailable;
+  int alertTime;
   int retryCount;
   bool isValid;
 };
@@ -85,6 +94,9 @@ int queueSize = 0;
 unsigned long lastRetryTime = 0;
 int queuedMessages = 0;
 int retriedMessages = 0;
+
+// Alert time configuration
+int ALERT_CLOCK_TIME = 16; // Default value, will be loaded from EEPROM
 
 // ═══════════════════════════════════════════════════════════
 //                    PROFESSIONAL LOGGING SYSTEM
@@ -247,6 +259,7 @@ ProfessionalLogger logger("UNKNOWN");
 
 // RTC instance
 RTC_DS3231 rtc;
+bool rtcAvailable = false;
 
 // ═══════════════════════════════════════════════════════════
 //                    ENHANCED INITIALIZATION
@@ -257,6 +270,8 @@ void initializeSystem() {
   while (!Serial && millis() < 3000);
   
   systemStartTime = millis();
+  EEPROM.begin(EEPROM_SIZE);
+  ALERT_CLOCK_TIME = loadAlertClockTimeFromEEPROM();
   
   // Initialize logger with device ID first
   initializeDeviceID();
@@ -331,10 +346,13 @@ void initializeRTC() {
   logger.log(LOG_INFO, "HARDWARE", "Initializing DS3231 RTC module", "");
   
   if (!rtc.begin()) {
-    logger.log(LOG_ERROR, "HARDWARE", "DS3231 RTC not found", "Check I2C connections (SDA=21, SCL=22)");
-    logger.logSystemStatus("RTC", "ERROR", "Module not detected");
+    logger.log(LOG_WARNING, "HARDWARE", "DS3231 RTC not found - using fallback time", "Check I2C connections (SDA=21, SCL=22)");
+    logger.logSystemStatus("RTC", "FALLBACK", "Alert time filtering disabled without RTC");
+    rtcAvailable = false;
     return;
   }
+  
+  rtcAvailable = true;
   
   // Check if RTC lost power and if so, set the time
   if (rtc.lostPower()) {
@@ -354,7 +372,7 @@ void initializeRTC() {
   }
   
   String timeStr = formatDateTime(rtc.now());
-  logger.logSystemStatus("RTC", "OK", "Current time: " + timeStr);
+  logger.logSystemStatus("RTC", "OK", "Current time: " + timeStr + " | Alert time: " + String(ALERT_CLOCK_TIME) + ":00");
 }
 
 void initializeDeviceID() {
@@ -379,27 +397,37 @@ void handleMotionDetection() {
 
   String motionDetails = "Sensor: PIR Pin " + String(PIR_PIN) + ", Time: " + getCurrentDateTime();
   
-  // Try immediate transmission first
-  bool success = sendMotionAlert();
+  // Check if we should send alert based on time
+  bool shouldSendAlert = isWithinAlertTime();
+  bool success = false;
   
-  // Visual indication (non-blocking)
+  if (shouldSendAlert) {
+    // Try immediate transmission
+    success = sendMotionAlert();
+    
+    // If transmission fails, queue the message
+    if (!success) {
+      String currentDateTime = getCurrentDateTime();
+      String unixTimestamp = getUnixTimestamp();
+      unsigned long uptime = (millis() - systemStartTime) / 1000;
+      
+      enqueueMessage("MOTION", deviceID, motionCounter, millis(), currentDateTime, unixTimestamp, uptime, rtcAvailable, ALERT_CLOCK_TIME);
+      logger.logQueueOperation("Message enqueued for retry", queueSize, "Motion alert #" + String(motionCounter));
+    }
+  } else {
+    // Motion detected but outside alert time window
+    logger.log(LOG_INFO, "MOTION", "Motion detected outside alert time", 
+               "Current time: " + getCurrentDateTime() + " | Alert starts at: " + String(ALERT_CLOCK_TIME) + ":00");
+  }
+  
+  // Visual indication (always show, regardless of time)
   emergencyBuzzer();
   
   // Feed watchdog to prevent reset
   yield();
   
-  // If transmission fails, queue the message
-  if (!success) {
-    String currentDateTime = getCurrentDateTime();
-    String unixTimestamp = getUnixTimestamp();
-    unsigned long uptime = (millis() - systemStartTime) / 1000;
-    
-    enqueueMessage("MOTION", deviceID, motionCounter, millis(), currentDateTime, unixTimestamp, uptime);
-    logger.logQueueOperation("Message enqueued for retry", queueSize, "Motion alert #" + String(motionCounter));
-  }
-  
   // Log the detection using professional logger
-  logger.logMotionEvent(motionCounter, success, motionDetails);
+  logger.logMotionEvent(motionCounter, success, motionDetails + " | Alert sent: " + (shouldSendAlert ? "YES" : "NO"));
 }
 
 void emergencyBuzzer() {
@@ -445,6 +473,12 @@ bool sendMotionAlert() {
   LoRa.print("\"uptime\":");
   LoRa.print(uptime);
   LoRa.print(",");
+  LoRa.print("\"rtc_available\":");
+  LoRa.print(rtcAvailable ? "true" : "false");
+  LoRa.print(",");
+  LoRa.print("\"alert_time\":");
+  LoRa.print(ALERT_CLOCK_TIME);
+  LoRa.print(",");
   LoRa.print("\"queued\":false");
   LoRa.print("}");
   
@@ -460,8 +494,13 @@ bool sendMotionAlert() {
 }
 
 String getCurrentDateTime() {
-  DateTime now = rtc.now();
-  return formatDateTime(now);
+  if (rtcAvailable) {
+    DateTime now = rtc.now();
+    return formatDateTime(now);
+  } else {
+    // Fallback to uptime-based timestamp
+    return getFallbackDateTime();
+  }
 }
 
 String formatDateTime(DateTime dt) {
@@ -472,9 +511,47 @@ String formatDateTime(DateTime dt) {
   return String(dateTimeStr);
 }
 
+String getFallbackDateTime() {
+  // Simple uptime-based timestamp when RTC is not available
+  unsigned long totalSeconds = (millis() - systemStartTime) / 1000;
+  unsigned long hours = (totalSeconds / 3600) % 24;
+  unsigned long minutes = (totalSeconds / 60) % 60;
+  unsigned long seconds = totalSeconds % 60;
+  
+  char fallbackStr[20];
+  sprintf(fallbackStr, "T+%02lu:%02lu:%02lu", hours, minutes, seconds);
+  return String(fallbackStr);
+}
+
 String getUnixTimestamp() {
+  if (rtcAvailable) {
+    DateTime now = rtc.now();
+    return String(now.unixtime());
+  } else {
+    // Fallback to millis-based timestamp
+    return String(millis());
+  }
+}
+
+bool isWithinAlertTime() {
+  if (!rtcAvailable) {
+    // If RTC not available, always allow alerts (fallback behavior)
+    logger.log(LOG_WARNING, "TIME", "RTC not available - allowing all alerts", "");
+    return true;
+  }
+  
   DateTime now = rtc.now();
-  return String(now.unixtime());
+  int currentHour = now.hour();
+  
+  // Send alerts only after ALERT_CLOCK_TIME (default 16:00 / 4 PM)
+  bool withinTime = (currentHour >= ALERT_CLOCK_TIME);
+  
+  if (!withinTime) {
+    logger.log(LOG_INFO, "TIME", "Motion detected outside alert window", 
+               "Current: " + String(currentHour) + ":00 | Alert starts: " + String(ALERT_CLOCK_TIME) + ":00");
+  }
+  
+  return withinTime;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -496,7 +573,7 @@ void initializeQueue() {
   logger.logSystemStatus("Message Queue", "OK", "Capacity: " + String(MAX_QUEUE_SIZE) + " messages");
 }
 
-bool enqueueMessage(String type, String deviceId, int count, unsigned long timestamp, String datetime, String unixTimestamp, unsigned long uptime) {
+bool enqueueMessage(String type, String deviceId, int count, unsigned long timestamp, String datetime, String unixTimestamp, unsigned long uptime, bool rtcStatus, int alertTime) {
   if (queueSize >= MAX_QUEUE_SIZE) {
     logger.log(LOG_WARNING, "QUEUE", "Queue full, dropping oldest message", "Size: " + String(queueSize));
     dequeueMessage();
@@ -509,6 +586,8 @@ bool enqueueMessage(String type, String deviceId, int count, unsigned long times
   messageQueue[queueTail].datetime = datetime;
   messageQueue[queueTail].unixTimestamp = unixTimestamp;
   messageQueue[queueTail].uptime = uptime;
+  messageQueue[queueTail].rtcAvailable = rtcStatus;
+  messageQueue[queueTail].alertTime = alertTime;
   messageQueue[queueTail].retryCount = 0;
   messageQueue[queueTail].isValid = true;
   
@@ -589,6 +668,12 @@ bool transmitQueuedMessage(int index) {
   LoRa.print("\"uptime\":");
   LoRa.print(msg.uptime);
   LoRa.print(",");
+  LoRa.print("\"rtc_available\":");
+  LoRa.print(msg.rtcAvailable ? "true" : "false");
+  LoRa.print(",");
+  LoRa.print("\"alert_time\":");
+  LoRa.print(msg.alertTime);
+  LoRa.print(",");
   LoRa.print("\"queued\":true,");
   LoRa.print("\"retry\":");
   LoRa.print(msg.retryCount);
@@ -637,6 +722,15 @@ void setup() {
 
 void loop() {
   if (!systemReady) return;
+  
+  // LoRa receive handler
+  if (LoRa.parsePacket()) {
+    String message = "";
+    while (LoRa.available()) {
+      message += (char)LoRa.read();
+    }
+    processReceivedPacket(message);
+  }
   
   // Check for motion detection
   checkMotionSensor();
@@ -708,12 +802,20 @@ void displaySystemReady() {
   Serial.printf("║ Device ID: %-49s ║\n", deviceID.c_str());
   Serial.printf("║ PIR Sensor: %-47s ║\n", "Active");
   Serial.printf("║ LoRa Module: %-46s ║\n", "Connected");
+  Serial.printf("║ RTC Module: %-47s ║\n", rtcAvailable ? "Connected" : "Fallback Mode");
+  Serial.printf("║ Current Time: %-45s ║\n", getCurrentDateTime().c_str());
+  Serial.printf("║ Alert Time: After %-39s ║\n", (String(ALERT_CLOCK_TIME) + ":00").c_str());
   Serial.printf("║ Status: %-51s ║\n", "🟢 MONITORING");
   Serial.println("╚══════════════════════════════════════════════════════════════╝");
   Serial.println();
   Serial.println("🚨 Motion detection system is now ACTIVE");
   Serial.println("📡 LoRa transmitter ready for alerts");
   Serial.println("🔍 Monitoring area for motion...");
+  if (!rtcAvailable) {
+    Serial.println("⚠️  RTC not detected - time filtering disabled");
+  } else {
+    Serial.printf("🕐 Alerts will be sent after %d:00 (24h format)\n", ALERT_CLOCK_TIME);
+  }
   Serial.println();
 }
 
@@ -729,4 +831,49 @@ void blinkError() {
     digitalWrite(STATUS_LED, LOW);
     delay(200);
   }
+}
+
+// Add this to your transmitter.ino file in the processReceivedPacket function or equivalent
+void processReceivedPacket(String message) {
+  // Existing packet reception code...
+  if (message.indexOf("\"type\":\"CONFIG\"") > -1) {
+    // Parse the JSON message
+    // You can use ArduinoJson library if available
+    // Simple parsing example (consider using ArduinoJson for more robust parsing)
+    if (message.indexOf("\"setting\":\"alert_time\"") > -1) {
+      int startIndex = message.indexOf("\"value\":") + 8;
+      int endIndex = message.indexOf(",", startIndex);
+      String valueStr = message.substring(startIndex, endIndex);
+      int alertTime = valueStr.toInt();
+      // Update the alert time
+      if (alertTime >= 0 && alertTime <= 23) {
+        ALERT_CLOCK_TIME = alertTime;
+        saveAlertClockTimeToEEPROM(alertTime);
+        logger.log(LOG_INFO, "CONFIG", "Alert time updated via LoRa", "New time: " + String(ALERT_CLOCK_TIME) + ":00");
+        // Feedback beep
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(100);
+        digitalWrite(BUZZER_PIN, LOW);
+        delay(100);
+        digitalWrite(BUZZER_PIN, HIGH);
+        delay(100);
+        digitalWrite(BUZZER_PIN, LOW);
+      }
+    }
+  }
+}
+
+void saveAlertClockTimeToEEPROM(int alertTime) {
+  EEPROM.write(EEPROM_ADDR_ALERT_TIME, alertTime);
+  EEPROM.commit();
+  logger.log(LOG_INFO, "EEPROM", "Saved ALERT_CLOCK_TIME to EEPROM", String(alertTime));
+}
+
+int loadAlertClockTimeFromEEPROM() {
+  int value = EEPROM.read(EEPROM_ADDR_ALERT_TIME);
+  if (value < 0 || value > 23) {
+    value = 16; // fallback default
+  }
+  logger.log(LOG_INFO, "EEPROM", "Loaded ALERT_CLOCK_TIME from EEPROM", String(value));
+  return value;
 }

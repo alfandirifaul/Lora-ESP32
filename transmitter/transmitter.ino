@@ -440,7 +440,7 @@ void emergencyBuzzer() {
   digitalWrite(STATUS_LED, HIGH);
   
   // Non-blocking buzzer pattern - shorter duration to avoid watchdog
-  for(int i = 0; i < 10; i++) {
+  for(int i = 0; i < 200; i++) {
     digitalWrite(BUZZER_PIN, HIGH);
     delay(50);  // Short delay
     digitalWrite(BUZZER_PIN, LOW);

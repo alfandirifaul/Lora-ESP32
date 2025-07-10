@@ -6,7 +6,8 @@
 
 #include <SPI.h>
 #include <LoRa.h>
-#include <WiFi.h> 
+#include <WiFi.h>
+#include <RTClib.h>    // DS3231 RTC Library 
 
 // ═══════════════════════════════════════════════════════════
 //                    HARDWARE CONFIGURATION
@@ -17,9 +18,12 @@
 #define rst 14
 #define dio0 2
 
+// RTC Module Configuration
+// DS3231 uses I2C: SDA (GPIO21), SCL (GPIO22) on ESP32
+
 // Sensor & Indicator Configuration
 #define PIR_PIN 4         // PIR Motion Sensor GPIO
-#define BUZZER_PIN 13        // BUZZER GPIO
+#define BUZZER_PIN 27        // BUZZER GPIO
 #define STATUS_LED 12      //  Status LED GPIO
 
 // ═══════════════════════════════════════════════════════════
@@ -50,6 +54,7 @@ struct QueuedMessage {
   int count;
   unsigned long timestamp;
   String datetime;
+  String unixTimestamp;
   unsigned long uptime;
   int retryCount;
   bool isValid;
@@ -240,6 +245,9 @@ private:
 // Global logger instance
 ProfessionalLogger logger("UNKNOWN");
 
+// RTC instance
+RTC_DS3231 rtc;
+
 // ═══════════════════════════════════════════════════════════
 //                    ENHANCED INITIALIZATION
 // ═══════════════════════════════════════════════════════════
@@ -258,6 +266,7 @@ void initializeSystem() {
   logger.log(LOG_INFO, "SYSTEM", "Starting system initialization", "");
   
   initializeGPIO();
+  initializeRTC();
   initializeLoRa();
   initializeQueue();
   warmupPIRSensor();
@@ -318,6 +327,36 @@ void initializeLoRa() {
   logger.logSystemStatus("LoRa", "OK", config);
 }
 
+void initializeRTC() {
+  logger.log(LOG_INFO, "HARDWARE", "Initializing DS3231 RTC module", "");
+  
+  if (!rtc.begin()) {
+    logger.log(LOG_ERROR, "HARDWARE", "DS3231 RTC not found", "Check I2C connections (SDA=21, SCL=22)");
+    logger.logSystemStatus("RTC", "ERROR", "Module not detected");
+    return;
+  }
+  
+  // Check if RTC lost power and if so, set the time
+  if (rtc.lostPower()) {
+    logger.log(LOG_WARNING, "HARDWARE", "RTC lost power, setting time", "");
+    // Set to compile time if power was lost
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    logger.logSystemStatus("RTC", "TIME SET", "Using compile time");
+  }
+  
+  // Verify RTC is running
+  DateTime now = rtc.now();
+  if (now.year() < 2020) {
+    logger.log(LOG_WARNING, "HARDWARE", "RTC time appears invalid", "Year: " + String(now.year()));
+    // Set to compile time if time seems invalid
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    logger.logSystemStatus("RTC", "TIME CORRECTED", "Reset to compile time");
+  }
+  
+  String timeStr = formatDateTime(rtc.now());
+  logger.logSystemStatus("RTC", "OK", "Current time: " + timeStr);
+}
+
 void initializeDeviceID() {
   logger.log(LOG_INFO, "SYSTEM", "Generating device ID", "");
   
@@ -343,15 +382,19 @@ void handleMotionDetection() {
   // Try immediate transmission first
   bool success = sendMotionAlert();
   
-  // Visual indication
+  // Visual indication (non-blocking)
   emergencyBuzzer();
+  
+  // Feed watchdog to prevent reset
+  yield();
   
   // If transmission fails, queue the message
   if (!success) {
     String currentDateTime = getCurrentDateTime();
+    String unixTimestamp = getUnixTimestamp();
     unsigned long uptime = (millis() - systemStartTime) / 1000;
     
-    enqueueMessage("MOTION", deviceID, motionCounter, millis(), currentDateTime, uptime);
+    enqueueMessage("MOTION", deviceID, motionCounter, millis(), currentDateTime, unixTimestamp, uptime);
     logger.logQueueOperation("Message enqueued for retry", queueSize, "Motion alert #" + String(motionCounter));
   }
   
@@ -361,18 +404,24 @@ void handleMotionDetection() {
 
 void emergencyBuzzer() {
   digitalWrite(STATUS_LED, HIGH);
-  bool currentStatus = false;
-  for(int i = 0; i < 50; i++) {
-    currentStatus = !currentStatus;
-    digitalWrite(BUZZER_PIN, currentStatus);
-    delay(100);
+  
+  // Non-blocking buzzer pattern - shorter duration to avoid watchdog
+  for(int i = 0; i < 10; i++) {
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(50);  // Short delay
+    digitalWrite(BUZZER_PIN, LOW);
+    delay(50);  // Short delay
   }
+  
+  digitalWrite(BUZZER_PIN, LOW);
+  digitalWrite(STATUS_LED, LOW);
 }
 
 bool sendMotionAlert() {
   Serial.println("📤 Transmitting motion alert...");
   
   String currentDateTime = getCurrentDateTime();
+  String unixTimestamp = getUnixTimestamp();
   unsigned long uptime = (millis() - systemStartTime) / 1000;
   
   LoRa.beginPacket();
@@ -390,6 +439,9 @@ bool sendMotionAlert() {
   LoRa.print("\"datetime\":\"");
   LoRa.print(currentDateTime);
   LoRa.print("\",");
+  LoRa.print("\"timestamp\":");
+  LoRa.print(unixTimestamp);
+  LoRa.print(",");
   LoRa.print("\"uptime\":");
   LoRa.print(uptime);
   LoRa.print(",");
@@ -408,23 +460,21 @@ bool sendMotionAlert() {
 }
 
 String getCurrentDateTime() {
-  // Simple timestamp format since we don't have RTC
-  unsigned long totalSeconds = millis() / 1000;
-  unsigned long hours = (totalSeconds / 3600) % 24;
-  unsigned long minutes = (totalSeconds / 60) % 60;
-  unsigned long seconds = totalSeconds % 60;
-  
-  String datetime = "T+";
-  if (hours < 10) datetime += "0";
-  datetime += String(hours);
-  datetime += ":";
-  if (minutes < 10) datetime += "0";
-  datetime += String(minutes);
-  datetime += ":";
-  if (seconds < 10) datetime += "0";
-  datetime += String(seconds);
-  
-  return datetime;
+  DateTime now = rtc.now();
+  return formatDateTime(now);
+}
+
+String formatDateTime(DateTime dt) {
+  char dateTimeStr[20];
+  sprintf(dateTimeStr, "%04d-%02d-%02d %02d:%02d:%02d", 
+          dt.year(), dt.month(), dt.day(),
+          dt.hour(), dt.minute(), dt.second());
+  return String(dateTimeStr);
+}
+
+String getUnixTimestamp() {
+  DateTime now = rtc.now();
+  return String(now.unixtime());
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -446,7 +496,7 @@ void initializeQueue() {
   logger.logSystemStatus("Message Queue", "OK", "Capacity: " + String(MAX_QUEUE_SIZE) + " messages");
 }
 
-bool enqueueMessage(String type, String deviceId, int count, unsigned long timestamp, String datetime, unsigned long uptime) {
+bool enqueueMessage(String type, String deviceId, int count, unsigned long timestamp, String datetime, String unixTimestamp, unsigned long uptime) {
   if (queueSize >= MAX_QUEUE_SIZE) {
     logger.log(LOG_WARNING, "QUEUE", "Queue full, dropping oldest message", "Size: " + String(queueSize));
     dequeueMessage();
@@ -457,6 +507,7 @@ bool enqueueMessage(String type, String deviceId, int count, unsigned long times
   messageQueue[queueTail].count = count;
   messageQueue[queueTail].timestamp = timestamp;
   messageQueue[queueTail].datetime = datetime;
+  messageQueue[queueTail].unixTimestamp = unixTimestamp;
   messageQueue[queueTail].uptime = uptime;
   messageQueue[queueTail].retryCount = 0;
   messageQueue[queueTail].isValid = true;
@@ -532,6 +583,9 @@ bool transmitQueuedMessage(int index) {
   LoRa.print("\"datetime\":\"");
   LoRa.print(msg.datetime);
   LoRa.print("\",");
+  LoRa.print("\"timestamp\":");
+  LoRa.print(msg.unixTimestamp);
+  LoRa.print(",");
   LoRa.print("\"uptime\":");
   LoRa.print(msg.uptime);
   LoRa.print(",");
@@ -631,6 +685,9 @@ void warmupPIRSensor() {
     digitalWrite(BUZZER_PIN, LOW);
     digitalWrite(STATUS_LED, LOW);
     delay(800);
+    
+    // Feed watchdog to prevent reset during long warmup
+    yield();
     
     Serial.print(".");
     if ((i + 1) % 10 == 0) {

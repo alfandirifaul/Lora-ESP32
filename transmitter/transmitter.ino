@@ -852,11 +852,11 @@ void processReceivedPacket(String message) {
         logger.log(LOG_INFO, "CONFIG", "Alert time updated via LoRa", "New time: " + String(ALERT_CLOCK_TIME) + ":00");
         // Feedback beep
         digitalWrite(BUZZER_PIN, HIGH);
-        delay(100);
+        delay(500);
         digitalWrite(BUZZER_PIN, LOW);
-        delay(100);
+        delay(500);
         digitalWrite(BUZZER_PIN, HIGH);
-        delay(100);
+        delay(500);
         digitalWrite(BUZZER_PIN, LOW);
       }
     }

@@ -15,6 +15,7 @@
 #include <WiFiClientSecure.h>
 #include <Wire.h>
 #include <BlynkSimpleEsp32.h>
+#include <EEPROM.h> // <-- Add EEPROM include
 
 // Create AsyncWebServer object on port 80
 AsyncWebServer server(80);
@@ -267,6 +268,7 @@ struct SystemState {
   bool prevAlarmActive = false;
   bool prevReady = true;
   bool statusChanged = false;
+  int alertTime = 16; // Default alert time (16:00)
 };
 SystemState state;
 
@@ -637,6 +639,19 @@ void initializeLoRa() {
   Serial.println("✅ LoRa Module Ready!");
 }
 
+// ========== EEPROM CONFIGURATION ==========
+#define EEPROM_SIZE 4
+#define EEPROM_ALERT_TIME_ADDR 0
+
+void saveAlertTimeToEEPROM(int alertTime) {
+  EEPROM.write(EEPROM_ALERT_TIME_ADDR, alertTime);
+  EEPROM.commit();
+}
+
+int loadAlertTimeFromEEPROM() {
+  return EEPROM.read(EEPROM_ALERT_TIME_ADDR);
+}
+
 // ========== RECEIVER STATUS FUNCTIONS ==========
 void sendReceiverStatus() {
   bool hasChanged = (state.isBusy != state.prevBusy) ||
@@ -810,6 +825,20 @@ void updateDisplay() {
       formatUptime((millis() - state.systemStartTime) / 1000).c_str());
   display.printf("RSSI: %s dBm\n", state.lastRSSI.c_str());
   display.printf("Status: %s\n", state.isReady ? "Ready" : "Busy");
+
+  // Show current alert time (clock setting)
+  display.printf("Time: %02d:00\n", state.alertTime);
+
+  // Show WiFi status
+  if (WiFi.status() == WL_CONNECTED) {
+    display.printf("WiFi: Connected\n");
+  } else {
+    display.printf("WiFi: Disconnected\n");
+  }
+
+  // Show LoRa status (assume always active if initialized)
+  display.printf("LoRa: Active\n");
+
   display.display();
   state.displayNeedsUpdate = false;
 }
@@ -955,6 +984,7 @@ void monitorWiFiConnection() {
 // ========== MAIN SETUP AND LOOP ==========
 void setup() {
   Serial.begin(115200);
+  EEPROM.begin(EEPROM_SIZE); // Initialize EEPROM
 
   initLittleFS();
   initializeHardware();
@@ -970,6 +1000,15 @@ void setup() {
   Serial.println(pass);
   Serial.println(ip);
   Serial.println(gateway);
+
+  // Load alert time from EEPROM, fallback to 16 if not set
+  int eepromAlertTime = loadAlertTimeFromEEPROM();
+  if (eepromAlertTime >= 0 && eepromAlertTime <= 23) {
+    state.alertTime = eepromAlertTime;
+  } else {
+    state.alertTime = 16;
+    saveAlertTimeToEEPROM(16);
+  }
 
   if (initWiFi()) {
     server.begin();
@@ -1092,6 +1131,8 @@ void loop() {
 
 // ========== BLYNK TO LORA CLOCK SETTINGS ==========
 void sendClockSettingsViaLoRa(int alertTime) {
+  state.alertTime = alertTime; // Update state with new alert time
+  saveAlertTimeToEEPROM(alertTime); // Save to EEPROM
   logger.log(LOG_INFO, "CONFIG", "Sending clock settings via LoRa", "Alert time: " + String(alertTime) + ":00");
   
   String clockMessage = "{";
@@ -1122,6 +1163,8 @@ BLYNK_WRITE(VPIN_CLOCK_SETTINGS) {
   
   // Validate the value (should be between 0-23 for 24-hour format)
   if (alertTime >= 0 && alertTime <= 23) {
+    state.alertTime = alertTime; // Update state with new alert time
+    saveAlertTimeToEEPROM(alertTime); // Save to EEPROM
     logger.log(LOG_INFO, "BLYNK", "Clock settings changed via Blynk", "Alert time: " + String(alertTime) + ":00");
     
     // Send to LoRa device

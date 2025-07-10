@@ -52,7 +52,7 @@ const long interval =
 
 // WiFi Manager Credentials
 const char *wifiManagerSSID = "LoRa-Security-WIFI-MANAGER";
-const char *wifiManagerPassword = "LoRa1234"; // Open Access Point
+const char *wifiManagerPassword = "LoRa1234";
 
 // ========== BLYNK CONFIGURATION ==========
 #define BLYNK_PRINT Serial
@@ -67,6 +67,7 @@ char blynkAuth[] = "C6Glsc-JhP-2p0dSrQXWduvI1HSp6pl1";
 #define VPIN_ALERT_DATA V1
 #define VPIN_LED_RECEIVER V2
 #define VPIN_BUZZER V4
+#define VPIN_CLOCK_SETTINGS V5
 
 // Initialize LittleFS
 void initLittleFS() {
@@ -1087,4 +1088,67 @@ void loop() {
   }
   
   delay(50);
+}
+
+// ========== BLYNK TO LORA CLOCK SETTINGS ==========
+void sendClockSettingsViaLoRa(int alertTime) {
+  logger.log(LOG_INFO, "CONFIG", "Sending clock settings via LoRa", "Alert time: " + String(alertTime) + ":00");
+  
+  String clockMessage = "{";
+  clockMessage += "\"type\":\"CONFIG\",";
+  clockMessage += "\"id\":\"" + state.receiverID + "\",";
+  clockMessage += "\"setting\":\"alert_time\",";
+  clockMessage += "\"value\":" + String(alertTime) + ",";
+  clockMessage += "\"time\":" + String(millis());
+  clockMessage += "}";
+  
+  LoRa.beginPacket();
+  LoRa.print(clockMessage);
+  bool success = LoRa.endPacket();
+  
+  if (success) {
+    Serial.println("✅ Clock settings sent successfully via LoRa");
+    Serial.println("   • Alert Time: " + String(alertTime) + ":00");
+  } else {
+    Serial.println("❌ Failed to send clock settings via LoRa");
+  }
+  
+  LoRa.receive();
+}
+
+// Add Blynk WRITE handler for VPIN_CLOCK_SETTINGS
+BLYNK_WRITE(VPIN_CLOCK_SETTINGS) {
+  int alertTime = param.asInt(); // Get alert time (hour) from Blynk
+  
+  // Validate the value (should be between 0-23 for 24-hour format)
+  if (alertTime >= 0 && alertTime <= 23) {
+    logger.log(LOG_INFO, "BLYNK", "Clock settings changed via Blynk", "Alert time: " + String(alertTime) + ":00");
+    
+    // Send to LoRa device
+    sendClockSettingsViaLoRa(alertTime);
+    
+    // Visual feedback
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0, 0);
+    display.println("Settings Updated");
+    display.println("===============");
+    display.printf("Alert Time: %d:00\n", alertTime);
+    display.println("");
+    display.println("Sent to transmitter");
+    display.println("via LoRa");
+    display.display();
+    
+    // Brief confirmation beep
+    digitalWrite(BUZZER_PIN, HIGH);
+    delay(100);
+    digitalWrite(BUZZER_PIN, LOW);
+    
+    // Update display after 3 seconds
+    delay(3000);
+    state.displayNeedsUpdate = true;
+  } else {
+    logger.log(LOG_WARNING, "BLYNK", "Invalid clock setting received", "Value: " + String(alertTime));
+  }
 }
